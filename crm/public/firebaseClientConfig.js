@@ -35,7 +35,7 @@ const GOOGLE_API_KEY = 'AIzaSyAIdbF2EgdbZSPqBaQhi1pnNb4t5xauwEc';
 
 const firebaseConfig = {
   apiKey: GOOGLE_API_KEY,
-  authDomain: 'ana-guimaraes.firebaseapp.com',
+  authDomain: 'apfood-e9627.firebaseapp.com',
   projectId: 'ana-guimaraes',
   storageBucket: 'ana-guimaraes.firebasestorage.app',
   messagingSenderId: '847824537421',

@@ -100,7 +100,7 @@ const GOOGLE_API_KEY = 'AIzaSyAIdbF2EgdbZSPqBaQhi1pnNb4t5xauwEc';
 
 const firebaseConfig = {
   apiKey: GOOGLE_API_KEY,
-  authDomain: 'ana-guimaraes.firebaseapp.com',
+  authDomain: 'apfood-e9627.firebaseapp.com',
   projectId: 'ana-guimaraes',
   // Match the SDK configuration (appspot.com is the correct host for the bucket)
   storageBucket: 'ana-guimaraes.appspot.com',

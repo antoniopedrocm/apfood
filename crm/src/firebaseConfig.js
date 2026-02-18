@@ -25,7 +25,7 @@ const GOOGLE_API_KEY = 'AIzaSyAIdbF2EgdbZSPqBaQhi1pnNb4t5xauwEc';
 const firebaseConfig = {
   apiKey: envVar('REACT_APP_FIREBASE_API_KEY') || GOOGLE_API_KEY,
   authDomain: envVar('REACT_APP_FIREBASE_AUTH_DOMAIN') ||
-    'ana-guimaraes.firebaseapp.com',
+    'apfood-e9627.firebaseapp.com',
   projectId: envVar('REACT_APP_FIREBASE_PROJECT_ID') || 'ana-guimaraes',
   // Use the default Firebase storage host (appspot.com). The previous value
   // pointed to firebasestorage.app, which is only for direct download links
