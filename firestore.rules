@@ -1,76 +1,124 @@
 rules_version = '2';
 service cloud.firestore {
-match /databases/{database}/documents {
+  match /databases/{database}/documents {
+    function isAuthenticated() {
+      return request.auth != null;
+    }
 
-// --- REGRAS PARA COLEÇÕES PÚBLICAS (Leitura permitida para todos) ---
+    function getUserDoc() {
+      return get(/databases/$(database)/documents/users/$(request.auth.uid));
+    }
 
-// PERMITE que qualquer visitante leia a lista de produtos.
-// APENAS usuários autenticados (funcionários no CRM) podem criar, alterar ou deletar produtos.
-match /produtos/{produtoId} {
-  allow read: if true;
-  allow write: if request.auth != null;
-}
+    function isAdminOrManagerForStore(storeId) {
+      return isAuthenticated()
+        && (
+          getUserDoc().data.role in ['ADMIN', 'MANAGER']
+          || getUserDoc().data.rolesByStore[storeId] in ['ADMIN', 'MANAGER']
+        );
+    }
 
-// PERMITE que qualquer visitante leia as configurações da loja (como valor de frete).
-// APENAS usuários autenticados podem alterar as configurações.
-match /configuracoes/{docId} {
-  allow read: if true;
-  allow write: if request.auth != null;
-}
+    function isOwnUser(uid) {
+      return isAuthenticated() && request.auth.uid == uid;
+    }
 
-// PERMITE que qualquer visitante leia as informações de um cupom para validação.
-// APENAS usuários autenticados podem criar ou alterar cupons.
-match /cupons/{cupomId} {
-  allow read: if true;
-  allow write: if request.auth != null;
-}
+    function hasOnlyPreferenceFields() {
+      return request.resource.data.diff(resource.data).changedKeys().hasOnly(['preferences']);
+    }
 
-// --- REGRAS PARA COLEÇÕES COM ACESSO RESTRITO ---
+    function isValidPreferencePayload() {
+      return request.resource.data.preferences.keys().hasOnly(['themeMode', 'uiAccentColor', 'updatedAt'])
+        && request.resource.data.preferences.themeMode in ['light', 'dark']
+        && (
+          !('uiAccentColor' in request.resource.data.preferences)
+          || request.resource.data.preferences.uiAccentColor is string
+        );
+    }
 
-// PERMITE que a página do cardápio CRIE um novo cliente, mas não leia a lista toda.
-// PERMITE a leitura apenas se for uma busca por telefone OU se o usuário estiver logado no CRM.
-match /clientes/{clienteId} {
-  allow create: if true;
-  allow read: if request.auth != null || resource.data.keys().hasOnly(['telefone']);
-  allow update: if true; // ✅ permite que a página do cardápio atualize endereços
-  allow delete: if request.auth != null;
-}
+    function validBrandingPayload() {
+      return request.resource.data.branding is map
+        && request.resource.data.branding.keys().hasOnly(['logoUrl', 'logoPath', 'colors', 'updatedAt', 'updatedBy'])
+        && request.resource.data.branding.colors.keys().hasOnly(['brandPrimary', 'brandSecondary', 'brandAccent'])
+        && request.resource.data.branding.logoUrl is string
+        && request.resource.data.branding.logoPath is string
+        && request.resource.data.branding.updatedBy is string
+        && request.resource.data.branding.colors.brandPrimary is string
+        && request.resource.data.branding.colors.brandSecondary is string
+        && request.resource.data.branding.colors.brandAccent is string;
+    }
 
+    // Stores: branding público para páginas de cardápio.
+    match /stores/{storeId} {
+      allow read: if true;
+      allow create, delete: if false;
+      allow update: if isAdminOrManagerForStore(storeId)
+        && request.resource.data.diff(resource.data).changedKeys().hasOnly(['branding', 'updatedAt'])
+        && validBrandingPayload();
+    }
 
-// PERMITE que a página do cardápio CRIE um novo pedido.
-// APENAS usuários autenticados podem ler, alterar ou deletar pedidos existentes.
-match /pedidos/{pedidoId} {
-  allow create: if true;
-  allow read, update, delete: if request.auth != null;
-}
+    // Users: cada usuário só atualiza suas preferências.
+    match /users/{uid} {
+      allow read: if isOwnUser(uid);
+      allow create: if isOwnUser(uid)
+        && request.resource.data.keys().hasOnly(['preferences'])
+        && isValidPreferencePayload();
+      allow update: if isOwnUser(uid)
+        && hasOnlyPreferenceFields()
+        && isValidPreferencePayload();
+      allow delete: if false;
+    }
 
-// --- REGRAS PARA LOJAS (MULTILOJAS) ---
-match /lojas/{lojaId} {
-  match /produtos/{produtoId} {
-    allow read: if true;
-    allow write: if request.auth != null;
-  }
-
-  match /configuracoes/{docId} {
-    allow read: if true;
-    allow write: if request.auth != null;
-
-    match /{subcollection}/{configDocId} {
+    // --- Regras legadas já existentes no projeto ---
+    match /produtos/{produtoId} {
       allow read: if true;
       allow write: if request.auth != null;
     }
+
+    match /configuracoes/{docId} {
+      allow read: if true;
+      allow write: if request.auth != null;
+    }
+
+    match /cupons/{cupomId} {
+      allow read: if true;
+      allow write: if request.auth != null;
+    }
+
+    match /clientes/{clienteId} {
+      allow create: if true;
+      allow read: if request.auth != null || resource.data.keys().hasOnly(['telefone']);
+      allow update: if true;
+      allow delete: if request.auth != null;
+    }
+
+    match /pedidos/{pedidoId} {
+      allow create: if true;
+      allow read, update, delete: if request.auth != null;
+    }
+
+    match /lojas/{lojaId} {
+      match /produtos/{produtoId} {
+        allow read: if true;
+        allow write: if request.auth != null;
+      }
+
+      match /configuracoes/{docId} {
+        allow read: if true;
+        allow write: if request.auth != null;
+
+        match /{subcollection}/{configDocId} {
+          allow read: if true;
+          allow write: if request.auth != null;
+        }
+      }
+
+      match /cupons/{cupomId} {
+        allow read: if true;
+        allow write: if request.auth != null;
+      }
+    }
+
+    match /{document=**} {
+      allow read, write: if request.auth != null;
+    }
   }
-
-  match /cupons/{cupomId} {
-    allow read: if true;
-    allow write: if request.auth != null;
-  }
-}
-
-// --- REGRAS PARA OUTRAS COLEÇÕES (Acesso somente para usuários autenticados no CRM) ---
-match /{document=**} {
-  allow read, write: if request.auth != null;
-}
-
-}
 }
