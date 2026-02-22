@@ -13,6 +13,7 @@ const logger = require("firebase-functions/logger");
 const admin = require("firebase-admin");
 const express = require("express");
 const cors = require("cors");
+const {isStoreOpenNow} = require('./storeAvailability');
 
 // Inicializa o Firebase Admin SDK
 admin.initializeApp();
@@ -203,6 +204,23 @@ const getStoreConfigCollection = (storeId, collectionName) => getStoreConfigDoc(
 const getLegacyConfigDoc = (storeId, configId) => getStoreRef(storeId).collection('configuracoes').doc(configId);
 
 const getLegacyInfoDoc = (storeId) => getStoreRef(storeId).collection('info').doc(STORE_INFO_DOC_ID);
+
+
+const validateStoreOpenOrThrow = async (storeId) => {
+  const storeSnap = await db.collection('stores').doc(storeId).get();
+  const legacyStoreSnap = storeSnap.exists ? null : await db.collection('lojas').doc(storeId).get();
+  const storeData = storeSnap.exists ? storeSnap.data() : (legacyStoreSnap?.data() || {});
+  const operacao = storeData?.operacao || {};
+  const status = isStoreOpenNow(operacao, new Date(), operacao?.schedule?.timezone);
+
+  if (!status.isOpen) {
+    const error = new HttpsError('failed-precondition', status.message || 'Loja fechada no momento');
+    error.details = { code: 'STORE_CLOSED', status };
+    throw error;
+  }
+
+  return {status, operacao};
+};
 
 // API Express para o Cardápio Online
 const app = express();
@@ -429,14 +447,19 @@ app.post("/pedidos", async (req, res) => {
   const lojaId = requireStoreId(req, res);
   if (!lojaId) return;
   try {
+    const {status} = await validateStoreOpenOrThrow(lojaId);
     const newOrder = {
       ...req.body,
       lojaId,
       createdAt: admin.firestore.FieldValue.serverTimestamp(),
+      storeStatusAtCheckout: status,
     };
     const docRef = await db.collection("lojas").doc(lojaId).collection("pedidos").add(newOrder);
     res.status(201).json({id: docRef.id});
   } catch (error) {
+    if (error?.details?.code === 'STORE_CLOSED') {
+      return res.status(412).json({ code: 'STORE_CLOSED', message: error.message, status: error.details.status });
+    }
     logger.error("Erro ao criar pedido:", error);
     res.status(500).send("Erro ao criar pedido.");
   }
@@ -599,6 +622,36 @@ app.post("/cupons/verificar", async (req, res) => {
 
 // Exporta o app Express como uma Cloud Function HTTP
 exports.api = onRequest(app);
+
+
+exports.createOrder = onCall(async (request) => {
+  if (!request.auth) {
+    throw new HttpsError('unauthenticated', 'Usuário precisa estar autenticado para finalizar pedido.');
+  }
+
+  const payload = request.data || {};
+  const storeId = payload.storeId || payload.lojaId;
+  if (!storeId) {
+    throw new HttpsError('invalid-argument', 'storeId é obrigatório.');
+  }
+
+  const {status} = await validateStoreOpenOrThrow(storeId);
+
+  const orderData = {
+    ...payload,
+    lojaId: storeId,
+    status: payload.status || 'Pendente',
+    createdAt: admin.firestore.FieldValue.serverTimestamp(),
+    createdBy: request.auth.uid,
+    storeStatusAtCheckout: status,
+  };
+
+  delete orderData.storeId;
+
+  const docRef = await db.collection('lojas').doc(storeId).collection('pedidos').add(orderData);
+
+  return { id: docRef.id, status: 'Pendente' };
+});
 
 // Cria uma nova loja e garante que os dados fiquem isolados por loja
 exports.createStore = onCall(async (request) => {

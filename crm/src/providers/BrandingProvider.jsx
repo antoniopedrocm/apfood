@@ -1,4 +1,5 @@
 import React, { createContext, useContext, useEffect, useMemo, useState } from 'react';
+import { isStoreOpenNow } from '../utils/storeAvailability';
 import { doc, onSnapshot } from 'firebase/firestore';
 import { db } from '../firebaseConfig';
 
@@ -13,6 +14,8 @@ const DEFAULT_BRANDING = {
 
 const BrandingContext = createContext({
   branding: DEFAULT_BRANDING,
+  operacao: null,
+  availability: { isOpen: true, message: 'Loja aberta' },
   loading: true,
   storeId: null,
   notFound: false,
@@ -31,6 +34,8 @@ const applyBrandingCssVariables = (branding) => {
 export const BrandingProvider = ({ storeId, children }) => {
   const [state, setState] = useState({
     branding: DEFAULT_BRANDING,
+    operacao: null,
+    availability: { isOpen: true, message: 'Loja aberta' },
     loading: true,
     notFound: false,
     error: null,
@@ -38,7 +43,7 @@ export const BrandingProvider = ({ storeId, children }) => {
 
   useEffect(() => {
     if (!storeId) {
-      setState({ branding: DEFAULT_BRANDING, loading: false, notFound: true, error: null });
+      setState({ branding: DEFAULT_BRANDING, operacao: null, availability: { isOpen: false, message: 'Loja não encontrada' }, loading: false, notFound: true, error: null });
       applyBrandingCssVariables(DEFAULT_BRANDING);
       return undefined;
     }
@@ -47,7 +52,7 @@ export const BrandingProvider = ({ storeId, children }) => {
       doc(db, 'stores', storeId),
       (snapshot) => {
         if (!snapshot.exists()) {
-          setState({ branding: DEFAULT_BRANDING, loading: false, notFound: true, error: null });
+          setState({ branding: DEFAULT_BRANDING, operacao: null, availability: { isOpen: false, message: 'Loja não encontrada' }, loading: false, notFound: true, error: null });
           applyBrandingCssVariables(DEFAULT_BRANDING);
           return;
         }
@@ -62,7 +67,10 @@ export const BrandingProvider = ({ storeId, children }) => {
           },
         };
 
-        setState({ branding, loading: false, notFound: false, error: null });
+        const operacao = data?.operacao || null;
+        const availability = isStoreOpenNow(operacao || {}, new Date(), operacao?.schedule?.timezone);
+
+        setState({ branding, operacao, availability, loading: false, notFound: false, error: null });
         applyBrandingCssVariables(branding);
       },
       (error) => {
@@ -77,6 +85,8 @@ export const BrandingProvider = ({ storeId, children }) => {
     () => ({
       storeId,
       branding: state.branding,
+      operacao: state.operacao,
+      availability: state.availability,
       loading: state.loading,
       notFound: state.notFound,
       error: state.error,
