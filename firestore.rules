@@ -34,6 +34,18 @@ service cloud.firestore {
         );
     }
 
+
+
+    function validOperacaoPayload() {
+      return request.resource.data.operacao is map
+        && request.resource.data.operacao.keys().hasOnly(['manualOpen', 'schedule', 'override', 'computed', 'updatedAt', 'updatedBy'])
+        && request.resource.data.operacao.manualOpen is bool
+        && request.resource.data.operacao.schedule is map
+        && request.resource.data.operacao.schedule.timezone is string
+        && request.resource.data.operacao.schedule.weekly is map
+        && (!('override' in request.resource.data.operacao) || request.resource.data.operacao.override is map);
+    }
+
     function validBrandingPayload() {
       return request.resource.data.branding is map
         && request.resource.data.branding.keys().hasOnly(['logoUrl', 'logoPath', 'colors', 'updatedAt', 'updatedBy'])
@@ -51,8 +63,12 @@ service cloud.firestore {
       allow read: if true;
       allow create, delete: if false;
       allow update: if isAdminOrManagerForStore(storeId)
-        && request.resource.data.diff(resource.data).changedKeys().hasOnly(['branding', 'updatedAt'])
-        && validBrandingPayload();
+        && request.resource.data.diff(resource.data).changedKeys().hasOnly(['branding', 'operacao', 'updatedAt', 'updatedBy'])
+        && (
+          (request.resource.data.diff(resource.data).changedKeys().hasOnly(['branding', 'updatedAt']) && validBrandingPayload())
+          || (request.resource.data.diff(resource.data).changedKeys().hasOnly(['operacao', 'updatedAt', 'updatedBy']) && validOperacaoPayload())
+          || (request.resource.data.diff(resource.data).changedKeys().hasOnly(['branding', 'operacao', 'updatedAt', 'updatedBy']) && validBrandingPayload() && validOperacaoPayload())
+        );
     }
 
     // Users: cada usuário só atualiza suas preferências.
@@ -91,7 +107,7 @@ service cloud.firestore {
     }
 
     match /pedidos/{pedidoId} {
-      allow create: if true;
+      allow create: if false;
       allow read, update, delete: if request.auth != null;
     }
 
@@ -114,6 +130,11 @@ service cloud.firestore {
       match /cupons/{cupomId} {
         allow read: if true;
         allow write: if request.auth != null;
+      }
+
+      match /pedidos/{pedidoId} {
+        allow create: if false;
+        allow read, update, delete: if request.auth != null;
       }
     }
 
