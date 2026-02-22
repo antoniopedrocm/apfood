@@ -25,6 +25,13 @@ service firebase.storage {
         && request.resource.contentType.matches('image/(png|jpeg|webp)');
     }
 
+
+    // Arquivos públicos opcionais (ex.: badges de status da loja no cardápio).
+    match /stores_public/{storeId}/{allPaths=**} {
+      allow read: if true;
+      allow write: if false;
+    }
+
     // Fallback: qualquer outro arquivo exige auth.
     match /{allPaths=**} {
       allow read, write: if request.auth != null;

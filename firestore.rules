@@ -34,91 +34,52 @@ service cloud.firestore {
         );
     }
 
-    function validBrandingPayload() {
-      return request.resource.data.branding is map
-        && request.resource.data.branding.keys().hasOnly(['logoUrl', 'logoPath', 'colors', 'updatedAt', 'updatedBy'])
-        && request.resource.data.branding.colors.keys().hasOnly(['brandPrimary', 'brandSecondary', 'brandAccent'])
-        && request.resource.data.branding.logoUrl is string
-        && request.resource.data.branding.logoPath is string
-        && request.resource.data.branding.updatedBy is string
-        && request.resource.data.branding.colors.brandPrimary is string
-        && request.resource.data.branding.colors.brandSecondary is string
-        && request.resource.data.branding.colors.brandAccent is string;
-    }
-
-    // Stores: branding público para páginas de cardápio.
     match /stores/{storeId} {
       allow read: if true;
       allow create, delete: if false;
-      allow update: if isAdminOrManagerForStore(storeId)
-        && request.resource.data.diff(resource.data).changedKeys().hasOnly(['branding', 'updatedAt'])
-        && validBrandingPayload();
+
+      // Branding + disponibilidade gerenciada por ADMIN/MANAGER.
+      allow update: if isAdminOrManagerForStore(storeId);
     }
 
-    // Users: cada usuário só atualiza suas preferências.
+    match /stores_public/{storeId} {
+      allow read: if true;
+      allow write: if false;
+    }
+
     match /users/{uid} {
       allow read: if isOwnUser(uid);
       allow create: if isOwnUser(uid)
-        && request.resource.data.keys().hasOnly(['preferences'])
-        && isValidPreferencePayload();
+        && request.resource.data.keys().hasOnly(['preferences']);
       allow update: if isOwnUser(uid)
         && hasOnlyPreferenceFields()
         && isValidPreferencePayload();
       allow delete: if false;
     }
 
-    // --- Regras legadas já existentes no projeto ---
-    match /produtos/{produtoId} {
+    match /lojas/{lojaId} {
       allow read: if true;
-      allow write: if request.auth != null;
-    }
+      allow write: if isAuthenticated();
 
-    match /configuracoes/{docId} {
-      allow read: if true;
-      allow write: if request.auth != null;
-    }
+      match /pedidos/{pedidoId} {
+        allow read: if isAuthenticated();
+        // Bloqueia escrita direta no cliente: pedidos devem passar por Cloud Function createOrder.
+        allow create, update, delete: if false;
+      }
 
-    match /cupons/{cupomId} {
-      allow read: if true;
-      allow write: if request.auth != null;
-    }
-
-    match /clientes/{clienteId} {
-      allow create: if true;
-      allow read: if request.auth != null || resource.data.keys().hasOnly(['telefone']);
-      allow update: if true;
-      allow delete: if request.auth != null;
+      match /{subCollection}/{docId} {
+        allow read: if true;
+        allow write: if isAuthenticated();
+      }
     }
 
     match /pedidos/{pedidoId} {
-      allow create: if true;
-      allow read, update, delete: if request.auth != null;
-    }
-
-    match /lojas/{lojaId} {
-      match /produtos/{produtoId} {
-        allow read: if true;
-        allow write: if request.auth != null;
-      }
-
-      match /configuracoes/{docId} {
-        allow read: if true;
-        allow write: if request.auth != null;
-
-        match /{subcollection}/{configDocId} {
-          allow read: if true;
-          allow write: if request.auth != null;
-        }
-      }
-
-      match /cupons/{cupomId} {
-        allow read: if true;
-        allow write: if request.auth != null;
-      }
+      allow read: if isAuthenticated();
+      allow create, update, delete: if false;
     }
 
     match /{document=**} {
-      allow read, write: if request.auth != null;
+      allow read, write: if isAuthenticated();
     }
   }
 }
