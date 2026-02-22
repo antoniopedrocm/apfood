@@ -13,6 +13,7 @@ const logger = require("firebase-functions/logger");
 const admin = require("firebase-admin");
 const express = require("express");
 const cors = require("cors");
+const {isStoreOpenNow} = require('./storeAvailability');
 
 // Inicializa o Firebase Admin SDK
 admin.initializeApp();
@@ -931,6 +932,48 @@ exports.updateUser = onCall(async (request) => {
         
         throw new HttpsError("internal", detailedMessage, { originalCode: error.code });
     }
+});
+
+
+exports.createOrder = onCall(async (request) => {
+  if (!request.auth?.uid) {
+    throw new HttpsError('unauthenticated', 'É necessário autenticar para criar pedido.');
+  }
+
+  const storeId = typeof request.data?.storeId === 'string' ? request.data.storeId.trim() : '';
+  const order = request.data?.order || {};
+
+  if (!storeId) {
+    throw new HttpsError('invalid-argument', 'storeId é obrigatório.');
+  }
+
+  const storeRef = db.collection('stores').doc(storeId);
+  const storeSnap = await storeRef.get();
+  if (!storeSnap.exists) {
+    throw new HttpsError('not-found', 'Loja não encontrada.');
+  }
+
+  const storeData = storeSnap.data() || {};
+  const status = isStoreOpenNow(storeData.operacao || {}, new Date(), storeData?.operacao?.schedule?.timezone);
+
+  if (!status.isOpen) {
+    throw new HttpsError('failed-precondition', 'STORE_CLOSED', {
+      code: 'STORE_CLOSED',
+      message: status.message || 'Loja fechada no momento',
+    });
+  }
+
+  const payload = {
+    ...order,
+    lojaId: storeId,
+    status: order.status || 'Pendente',
+    createdAt: admin.firestore.FieldValue.serverTimestamp(),
+    createdBy: request.auth.uid,
+    origem: order.origem || 'Plataforma',
+  };
+
+  const orderRef = await db.collection('lojas').doc(storeId).collection('pedidos').add(payload);
+  return { id: orderRef.id, status: payload.status };
 });
 
 // Deleta um usuário
