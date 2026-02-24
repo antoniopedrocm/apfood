@@ -67,6 +67,21 @@ export const VAPID_KEY =
 
 // Initialise the Firebase app.  Use getApps() to avoid creating
 // duplicate instances if this module is imported multiple times.
+
+export const firebaseAuthConfigSnapshot = {
+  apiKey: firebaseConfig.apiKey,
+  authDomain: firebaseConfig.authDomain,
+  projectId: firebaseConfig.projectId,
+  appId: firebaseConfig.appId,
+  messagingSenderId: firebaseConfig.messagingSenderId,
+};
+
+if (isDev && firebaseAuthConfigSnapshot.projectId !== 'apfood-e9627') {
+  console.warn(
+    `[firebaseConfig] Projeto Firebase inesperado: ${firebaseAuthConfigSnapshot.projectId}. Esperado: apfood-e9627.`
+  );
+}
+
 const app = getApps().length ? getApps()[0] : initializeApp(firebaseConfig);
 
 // Optionally enable Google Analytics (only works in browsers).  When

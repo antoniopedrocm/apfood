@@ -8,7 +8,7 @@ import {
 
 // --- CORREÇÃO ---
 // Importando 'functions' do seu arquivo de configuração do Firebase.
-import { auth, db, storage, functions } from './firebaseConfig.js';
+import { auth, db, storage, functions, firebaseAuthConfigSnapshot } from './firebaseConfig.js';
 //import { firebaseConfig } from './firebaseConfig.js';
 
 // --- CORREÇÃO ---
@@ -26,6 +26,8 @@ import { ref, uploadBytes, getDownloadURL } from "firebase/storage";
 import { audioManager } from './utils/AudioManager.js';
 import { registerDeviceForPush, listenForForegroundMessages, subscribeToServiceWorkerMessages } from './utils/notifications.js';
 import { updateStock as updateStockService } from './services/stockService.js';
+import { logAuthDiagnostics, warnIfHostNotMapped } from './utils/authDiagnostics.js';
+import { normalizeAuthError, mapAuthErrorToUserMessage } from './utils/authErrors.js';
 
 // --- importação para Android
 import { NativeAudio } from '@capacitor-community/native-audio';
@@ -90,41 +92,12 @@ const getStoreDocRef = (storeId, collectionName, docId, useLegacyPath = false) =
 
 const getStoreConfigDocRef = (storeId) => doc(db, 'lojas', storeId, 'configuracoes', CONFIG_DOC_ID);
 
+
 const isPopupFallbackError = (code = '') => (
   code === 'auth/popup-blocked' ||
   code === 'auth/popup-closed-by-user' ||
   code === 'auth/cancelled-popup-request'
 );
-
-const isRefererBlockedError = (code = '') => (
-  code?.startsWith('auth/requests-from-referer-') && code?.endsWith('-are-blocked')
-);
-
-const mapAuthErrorToUserMessage = (error) => {
-  const code = error?.code || '';
-
-  if (code === 'auth/user-not-found' || code === 'auth/wrong-password' || code === 'auth/invalid-credential') {
-    return 'Email ou senha inválidos.';
-  }
-
-  if (isRefererBlockedError(code)) {
-    return 'Domínio ainda não autorizado no Firebase Authentication. Contate o administrador.';
-  }
-
-  if (code === 'auth/popup-blocked') {
-    return 'O navegador bloqueou o popup. Vamos tentar novamente via redirecionamento.';
-  }
-
-  if (code === 'auth/popup-closed-by-user') {
-    return 'Você fechou a janela de login antes de concluir a autenticação.';
-  }
-
-  if (code === 'auth/cancelled-popup-request') {
-    return 'Já existe uma tentativa de login em andamento. Aguarde alguns segundos e tente novamente.';
-  }
-
-  return 'Ocorreu um erro de autenticação. Tente novamente em instantes.';
-};
 
 const getTenantSlugFromHostname = (hostname = '') => {
   const normalizedHost = (hostname || '').toLowerCase();
@@ -3502,6 +3475,11 @@ function App() {
         sessionStorage.setItem(AUTH_PROGRESS_KEY, 'true');
 
         try {
+            logAuthDiagnostics({
+                loginMethod: 'EMAIL_PASSWORD',
+                firebaseConfigSnapshot: firebaseAuthConfigSnapshot,
+            });
+
             await signInWithEmailAndPassword(auth, email, password);
             setShowLogin(false);
             setEmail('');
@@ -3509,8 +3487,13 @@ function App() {
             setCurrentPage('dashboard');
             finalizeCentralizedLoginReturn();
         } catch (error) {
+            const normalizedError = normalizeAuthError(error);
             const friendlyMessage = mapAuthErrorToUserMessage(error);
-            console.error('[AUTH][EMAIL_PASSWORD] Erro no login:', { code: error?.code, message: error?.message, error });
+            logAuthDiagnostics({
+                loginMethod: 'EMAIL_PASSWORD',
+                firebaseConfigSnapshot: firebaseAuthConfigSnapshot,
+                normalizedError,
+            });
             setLoginError(friendlyMessage);
         } finally {
             sessionStorage.removeItem(AUTH_PROGRESS_KEY);
@@ -3534,6 +3517,11 @@ function App() {
         sessionStorage.setItem(AUTH_PROGRESS_KEY, 'true');
 
         try {
+            logAuthDiagnostics({
+                loginMethod: 'GOOGLE_POPUP',
+                firebaseConfigSnapshot: firebaseAuthConfigSnapshot,
+            });
+
             await setPersistence(auth, browserLocalPersistence);
             await signInWithPopup(auth, provider);
             sessionStorage.removeItem(GOOGLE_AUTH_FLOW_KEY);
@@ -3549,18 +3537,20 @@ function App() {
                     await signInWithRedirect(auth, provider);
                     return;
                 } catch (redirectError) {
-                    console.error('[AUTH][GOOGLE_REDIRECT] Erro no fallback de redirect:', {
-                        code: redirectError?.code,
-                        message: redirectError?.message,
-                        redirectError,
+                    const normalizedError = normalizeAuthError(redirectError);
+                    logAuthDiagnostics({
+                        loginMethod: 'GOOGLE_REDIRECT',
+                        firebaseConfigSnapshot: firebaseAuthConfigSnapshot,
+                        normalizedError,
                     });
                     setLoginError(mapAuthErrorToUserMessage(redirectError));
                 }
             } else {
-                console.error('[AUTH][GOOGLE_POPUP] Erro no login com Google:', {
-                    code: error?.code,
-                    message: error?.message,
-                    error,
+                const normalizedError = normalizeAuthError(error);
+                logAuthDiagnostics({
+                    loginMethod: 'GOOGLE_POPUP',
+                    firebaseConfigSnapshot: firebaseAuthConfigSnapshot,
+                    normalizedError,
                 });
                 setLoginError(mapAuthErrorToUserMessage(error));
             }
@@ -3569,6 +3559,10 @@ function App() {
             setIsAuthInProgress(false);
         }
     };
+
+    useEffect(() => {
+        warnIfHostNotMapped();
+    }, []);
 
     useEffect(() => {
         const params = new URLSearchParams(window.location.search);
@@ -3616,10 +3610,11 @@ function App() {
                     return;
                 }
 
-                console.error('[AUTH][GOOGLE_REDIRECT] Erro ao processar retorno do login com Google:', {
-                    code: error?.code,
-                    message: error?.message,
-                    error,
+                const normalizedError = normalizeAuthError(error);
+                logAuthDiagnostics({
+                    loginMethod: 'GOOGLE_REDIRECT',
+                    firebaseConfigSnapshot: firebaseAuthConfigSnapshot,
+                    normalizedError,
                 });
                 if (active) {
                     setLoginError(mapAuthErrorToUserMessage(error));
