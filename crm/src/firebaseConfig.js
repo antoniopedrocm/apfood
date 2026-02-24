@@ -40,6 +40,12 @@ const firebaseConfig = {
   measurementId: envVar('REACT_APP_FIREBASE_MEASUREMENT_ID') || 'G-F8BVTNLEW7',
 };
 
+export const firebasePublicConfig = {
+  projectId: firebaseConfig.projectId,
+  authDomain: firebaseConfig.authDomain,
+  apiKeySuffix: firebaseConfig.apiKey ? firebaseConfig.apiKey.slice(-6) : 'N/A',
+};
+
 const runtimeEnv =
   (typeof process !== 'undefined' && process.env && process.env.NODE_ENV) ||
   import.meta.env?.MODE ||

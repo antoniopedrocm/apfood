@@ -8,7 +8,7 @@ import {
 
 // --- CORREÇÃO ---
 // Importando 'functions' do seu arquivo de configuração do Firebase.
-import { auth, db, storage, functions } from './firebaseConfig.js';
+import { auth, db, storage, functions, firebasePublicConfig } from './firebaseConfig.js';
 //import { firebaseConfig } from './firebaseConfig.js';
 
 // --- CORREÇÃO ---
@@ -26,6 +26,12 @@ import { ref, uploadBytes, getDownloadURL } from "firebase/storage";
 import { audioManager } from './utils/AudioManager.js';
 import { registerDeviceForPush, listenForForegroundMessages, subscribeToServiceWorkerMessages } from './utils/notifications.js';
 import { updateStock as updateStockService } from './services/stockService.js';
+import {
+  isPopupFallbackError,
+  logAuthRuntimeDiagnostics,
+  mapAuthErrorToUserMessage,
+  warnIfHostOutsideAllowlist,
+} from './utils/authDiagnostics.js';
 
 // --- importação para Android
 import { NativeAudio } from '@capacitor-community/native-audio';
@@ -89,42 +95,6 @@ const getStoreDocRef = (storeId, collectionName, docId, useLegacyPath = false) =
 };
 
 const getStoreConfigDocRef = (storeId) => doc(db, 'lojas', storeId, 'configuracoes', CONFIG_DOC_ID);
-
-const isPopupFallbackError = (code = '') => (
-  code === 'auth/popup-blocked' ||
-  code === 'auth/popup-closed-by-user' ||
-  code === 'auth/cancelled-popup-request'
-);
-
-const isRefererBlockedError = (code = '') => (
-  code?.startsWith('auth/requests-from-referer-') && code?.endsWith('-are-blocked')
-);
-
-const mapAuthErrorToUserMessage = (error) => {
-  const code = error?.code || '';
-
-  if (code === 'auth/user-not-found' || code === 'auth/wrong-password' || code === 'auth/invalid-credential') {
-    return 'Email ou senha inválidos.';
-  }
-
-  if (isRefererBlockedError(code)) {
-    return 'Domínio ainda não autorizado no Firebase Authentication. Contate o administrador.';
-  }
-
-  if (code === 'auth/popup-blocked') {
-    return 'O navegador bloqueou o popup. Vamos tentar novamente via redirecionamento.';
-  }
-
-  if (code === 'auth/popup-closed-by-user') {
-    return 'Você fechou a janela de login antes de concluir a autenticação.';
-  }
-
-  if (code === 'auth/cancelled-popup-request') {
-    return 'Já existe uma tentativa de login em andamento. Aguarde alguns segundos e tente novamente.';
-  }
-
-  return 'Ocorreu um erro de autenticação. Tente novamente em instantes.';
-};
 
 const getTenantSlugFromHostname = (hostname = '') => {
   const normalizedHost = (hostname || '').toLowerCase();
@@ -3488,6 +3458,14 @@ function App() {
         };
     }, [availableStores]);
 
+    useEffect(() => {
+        warnIfHostOutsideAllowlist();
+        logAuthRuntimeDiagnostics({
+            method: 'AUTH_BOOTSTRAP',
+            firebasePublicConfig,
+        });
+    }, []);
+
     const handleLogin = async () => {
         if (isAuthInProgress) return;
         setLoginError('');
@@ -3500,6 +3478,7 @@ function App() {
 
         setIsAuthInProgress(true);
         sessionStorage.setItem(AUTH_PROGRESS_KEY, 'true');
+        logAuthRuntimeDiagnostics({ method: 'EMAIL_PASSWORD', firebasePublicConfig });
 
         try {
             await signInWithEmailAndPassword(auth, email, password);
@@ -3510,7 +3489,7 @@ function App() {
             finalizeCentralizedLoginReturn();
         } catch (error) {
             const friendlyMessage = mapAuthErrorToUserMessage(error);
-            console.error('[AUTH][EMAIL_PASSWORD] Erro no login:', { code: error?.code, message: error?.message, error });
+            logAuthRuntimeDiagnostics({ method: 'EMAIL_PASSWORD', firebasePublicConfig, error });
             setLoginError(friendlyMessage);
         } finally {
             sessionStorage.removeItem(AUTH_PROGRESS_KEY);
@@ -3532,6 +3511,7 @@ function App() {
 
         setIsAuthInProgress(true);
         sessionStorage.setItem(AUTH_PROGRESS_KEY, 'true');
+        logAuthRuntimeDiagnostics({ method: 'GOOGLE_POPUP', firebasePublicConfig });
 
         try {
             await setPersistence(auth, browserLocalPersistence);
@@ -3546,22 +3526,15 @@ function App() {
             if (isPopupFallbackError(code)) {
                 try {
                     sessionStorage.setItem(GOOGLE_AUTH_FLOW_KEY, 'true');
+                    logAuthRuntimeDiagnostics({ method: 'GOOGLE_REDIRECT', firebasePublicConfig });
                     await signInWithRedirect(auth, provider);
                     return;
                 } catch (redirectError) {
-                    console.error('[AUTH][GOOGLE_REDIRECT] Erro no fallback de redirect:', {
-                        code: redirectError?.code,
-                        message: redirectError?.message,
-                        redirectError,
-                    });
+                    logAuthRuntimeDiagnostics({ method: 'GOOGLE_REDIRECT', firebasePublicConfig, error: redirectError });
                     setLoginError(mapAuthErrorToUserMessage(redirectError));
                 }
             } else {
-                console.error('[AUTH][GOOGLE_POPUP] Erro no login com Google:', {
-                    code: error?.code,
-                    message: error?.message,
-                    error,
-                });
+                logAuthRuntimeDiagnostics({ method: 'GOOGLE_POPUP', firebasePublicConfig, error });
                 setLoginError(mapAuthErrorToUserMessage(error));
             }
         } finally {
@@ -3616,11 +3589,7 @@ function App() {
                     return;
                 }
 
-                console.error('[AUTH][GOOGLE_REDIRECT] Erro ao processar retorno do login com Google:', {
-                    code: error?.code,
-                    message: error?.message,
-                    error,
-                });
+                logAuthRuntimeDiagnostics({ method: 'GOOGLE_REDIRECT', firebasePublicConfig, error });
                 if (active) {
                     setLoginError(mapAuthErrorToUserMessage(error));
                 }
