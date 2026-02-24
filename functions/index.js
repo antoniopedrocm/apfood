@@ -511,7 +511,7 @@ app.post("/frete/calcular", async (req, res) => {
 
 // Rota para verificar cupom
 app.post("/cupons/verificar", async (req, res) => {
-    const { codigo, totalCarrinho, telefone } = req.body;
+    const { codigo, totalCarrinho } = req.body;
     const lojaId = requireStoreId(req, res);
     if (!lojaId) return;
     try {
