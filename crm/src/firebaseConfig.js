@@ -26,12 +26,12 @@ const firebaseConfig = {
   apiKey: envVar('REACT_APP_FIREBASE_API_KEY') || GOOGLE_API_KEY,
   authDomain: envVar('REACT_APP_FIREBASE_AUTH_DOMAIN') ||
     'apfood-e9627.firebaseapp.com',
-  projectId: envVar('REACT_APP_FIREBASE_PROJECT_ID') || 'ana-guimaraes',
+  projectId: envVar('REACT_APP_FIREBASE_PROJECT_ID') || 'apfood-e9627',
   // Use the default Firebase storage host (appspot.com). The previous value
   // pointed to firebasestorage.app, which is only for direct download links
   // and breaks SDK requests.
   storageBucket:
-    envVar('REACT_APP_FIREBASE_STORAGE_BUCKET') || 'ana-guimaraes.appspot.com',
+    envVar('REACT_APP_FIREBASE_STORAGE_BUCKET') || 'apfood-e9627.appspot.com',
   messagingSenderId:
     envVar('REACT_APP_FIREBASE_MESSAGING_SENDER_ID') || '847824537421',
   appId:

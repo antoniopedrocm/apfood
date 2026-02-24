@@ -43,6 +43,13 @@ const STORE_ALL_KEY = '__all__';
 const DEFAULT_FORNECEDOR_CATEGORIES = ['Insumos', 'Embalagens', 'Bebidas', 'Decoração', 'Serviços'];
 const CONFIG_DOC_ID = 'config';
 const GOOGLE_AUTH_FLOW_KEY = 'google-auth-flow-in-progress';
+const AUTH_PROGRESS_KEY = 'auth-in-progress';
+const AUTH_RETURN_URL_KEY = 'auth-return-url';
+const AUTH_TENANT_SLUG_KEY = 'auth-tenant-slug';
+const AUTH_RETURN_URL_QUERY_PARAM = 'authReturnUrl';
+const AUTH_TENANT_SLUG_QUERY_PARAM = 'tenantSlug';
+const AUTH_CENTER_ORIGIN = process.env.REACT_APP_AUTH_CENTER_ORIGIN || 'https://apfood.com.br';
+const ROOT_DOMAIN = 'apfood.com.br';
 const CONFIG_COLLECTIONS = new Set(['cupons', 'logs']);
 const MENU_PERMISSION_KEYS = [
   'pagina-inicial',
@@ -82,6 +89,63 @@ const getStoreDocRef = (storeId, collectionName, docId, useLegacyPath = false) =
 };
 
 const getStoreConfigDocRef = (storeId) => doc(db, 'lojas', storeId, 'configuracoes', CONFIG_DOC_ID);
+
+const isPopupFallbackError = (code = '') => (
+  code === 'auth/popup-blocked' ||
+  code === 'auth/popup-closed-by-user' ||
+  code === 'auth/cancelled-popup-request'
+);
+
+const isRefererBlockedError = (code = '') => (
+  code?.startsWith('auth/requests-from-referer-') && code?.endsWith('-are-blocked')
+);
+
+const mapAuthErrorToUserMessage = (error) => {
+  const code = error?.code || '';
+
+  if (code === 'auth/user-not-found' || code === 'auth/wrong-password' || code === 'auth/invalid-credential') {
+    return 'Email ou senha inválidos.';
+  }
+
+  if (isRefererBlockedError(code)) {
+    return 'Domínio ainda não autorizado no Firebase Authentication. Contate o administrador.';
+  }
+
+  if (code === 'auth/popup-blocked') {
+    return 'O navegador bloqueou o popup. Vamos tentar novamente via redirecionamento.';
+  }
+
+  if (code === 'auth/popup-closed-by-user') {
+    return 'Você fechou a janela de login antes de concluir a autenticação.';
+  }
+
+  if (code === 'auth/cancelled-popup-request') {
+    return 'Já existe uma tentativa de login em andamento. Aguarde alguns segundos e tente novamente.';
+  }
+
+  return 'Ocorreu um erro de autenticação. Tente novamente em instantes.';
+};
+
+const getTenantSlugFromHostname = (hostname = '') => {
+  const normalizedHost = (hostname || '').toLowerCase();
+  const localHosts = new Set(['localhost', '127.0.0.1', '0.0.0.0']);
+
+  if (!normalizedHost || localHosts.has(normalizedHost)) {
+    return null;
+  }
+
+  const suffix = `.${ROOT_DOMAIN}`;
+  if (!normalizedHost.endsWith(suffix)) {
+    return null;
+  }
+
+  const subdomain = normalizedHost.slice(0, -suffix.length);
+  if (!subdomain || subdomain.includes('.')) {
+    return null;
+  }
+
+  return /^[a-z0-9-]{2,50}$/.test(subdomain) ? subdomain : null;
+};
 
 const COLLECTIONS_TO_SYNC = [
   'produtos',
@@ -2197,6 +2261,7 @@ function App() {
   const [passwordResetEmail, setPasswordResetEmail] = useState("");
   const [passwordResetMessage, setPasswordResetMessage] = useState("");
   const [authLoading, setAuthLoading] = useState(true);
+  const [isAuthInProgress, setIsAuthInProgress] = useState(false);
   const [stopAlarmFn, setStopAlarmFn] = useState(null);
   const [isAlarmPlaying, setIsAlarmPlaying] = useState(false);
   const [hasNewPendingOrders, setHasNewPendingOrders] = useState(false);
@@ -2240,6 +2305,35 @@ function App() {
   const [selectedStoreId, setSelectedStoreId] = usePersistentState('selectedStoreId', null);
   const [showStoreManager, setShowStoreManager] = useState(false);
   const [isCreatingStore, setIsCreatingStore] = useState(false);
+
+  const isTenantSubdomain = useMemo(
+    () => !!getTenantSlugFromHostname(window.location.hostname),
+    []
+  );
+
+  const prepareCentralizedLogin = useCallback(() => {
+    const tenantSlug = getTenantSlugFromHostname(window.location.hostname);
+    const returnUrl = window.location.href;
+    const authUrl = new URL('/admin', AUTH_CENTER_ORIGIN);
+
+    authUrl.searchParams.set(AUTH_RETURN_URL_QUERY_PARAM, returnUrl);
+    if (tenantSlug) {
+      authUrl.searchParams.set(AUTH_TENANT_SLUG_QUERY_PARAM, tenantSlug);
+    }
+
+    window.location.assign(authUrl.toString());
+  }, []);
+
+  const finalizeCentralizedLoginReturn = useCallback(() => {
+    const returnUrl = sessionStorage.getItem(AUTH_RETURN_URL_KEY);
+    if (!returnUrl) {
+      return;
+    }
+
+    sessionStorage.removeItem(AUTH_RETURN_URL_KEY);
+    sessionStorage.removeItem(AUTH_TENANT_SLUG_KEY);
+    window.location.assign(returnUrl);
+  }, []);
 
   useEffect(() => {
     if (!isiOS || soundUnlocked) return undefined;
@@ -3395,49 +3489,100 @@ function App() {
     }, [availableStores]);
 
     const handleLogin = async () => {
+        if (isAuthInProgress) return;
         setLoginError('');
+
+        if (isTenantSubdomain) {
+            setLoginError('Você será redirecionado para o login seguro em apfood.com.br.');
+            prepareCentralizedLogin();
+            return;
+        }
+
+        setIsAuthInProgress(true);
+        sessionStorage.setItem(AUTH_PROGRESS_KEY, 'true');
+
         try {
             await signInWithEmailAndPassword(auth, email, password);
             setShowLogin(false);
             setEmail('');
             setPassword('');
             setCurrentPage('dashboard');
-             // O onAuthStateChanged cuidará de inicializar o AudioManager se necessário
+            finalizeCentralizedLoginReturn();
         } catch (error) {
-            if (error.code === 'auth/user-not-found' || error.code === 'auth/wrong-password' || error.code === 'auth/invalid-credential') {
-                setLoginError('Email ou senha inválidos.');
-            } else {
-                 console.error("Erro no login:", error);
-                setLoginError('Ocorreu um erro. Tente novamente.');
-            }
+            const friendlyMessage = mapAuthErrorToUserMessage(error);
+            console.error('[AUTH][EMAIL_PASSWORD] Erro no login:', { code: error?.code, message: error?.message, error });
+            setLoginError(friendlyMessage);
+        } finally {
+            sessionStorage.removeItem(AUTH_PROGRESS_KEY);
+            setIsAuthInProgress(false);
         }
     };
 
     const handleGoogleSignIn = async () => {
+        if (isAuthInProgress) return;
         setLoginError('');
+
+        if (isTenantSubdomain) {
+            setLoginError('Você será redirecionado para o login seguro em apfood.com.br.');
+            prepareCentralizedLogin();
+            return;
+        }
+
         const provider = new GoogleAuthProvider();
+
+        setIsAuthInProgress(true);
+        sessionStorage.setItem(AUTH_PROGRESS_KEY, 'true');
+
         try {
             await setPersistence(auth, browserLocalPersistence);
             await signInWithPopup(auth, provider);
             sessionStorage.removeItem(GOOGLE_AUTH_FLOW_KEY);
             setShowLogin(false);
             setCurrentPage('dashboard');
+            finalizeCentralizedLoginReturn();
         } catch (error) {
-            const fallbackToRedirect = error?.code === 'auth/popup-blocked' || error?.code === 'auth/cancelled-popup-request';
+            const code = error?.code || '';
 
-            if (fallbackToRedirect) {
+            if (isPopupFallbackError(code)) {
                 try {
                     sessionStorage.setItem(GOOGLE_AUTH_FLOW_KEY, 'true');
                     await signInWithRedirect(auth, provider);
                     return;
                 } catch (redirectError) {
-                    console.error('Erro no fallback de redirect do Google:', redirectError);
+                    console.error('[AUTH][GOOGLE_REDIRECT] Erro no fallback de redirect:', {
+                        code: redirectError?.code,
+                        message: redirectError?.message,
+                        redirectError,
+                    });
+                    setLoginError(mapAuthErrorToUserMessage(redirectError));
                 }
+            } else {
+                console.error('[AUTH][GOOGLE_POPUP] Erro no login com Google:', {
+                    code: error?.code,
+                    message: error?.message,
+                    error,
+                });
+                setLoginError(mapAuthErrorToUserMessage(error));
             }
-            console.error("Erro no login com Google:", error);
-            setLoginError('Ocorreu um erro ao entrar com Google.');
+        } finally {
+            sessionStorage.removeItem(AUTH_PROGRESS_KEY);
+            setIsAuthInProgress(false);
         }
     };
+
+    useEffect(() => {
+        const params = new URLSearchParams(window.location.search);
+        const returnUrl = params.get(AUTH_RETURN_URL_QUERY_PARAM);
+        const tenantSlug = params.get(AUTH_TENANT_SLUG_QUERY_PARAM);
+
+        if (returnUrl) {
+            sessionStorage.setItem(AUTH_RETURN_URL_KEY, returnUrl);
+        }
+
+        if (tenantSlug) {
+            sessionStorage.setItem(AUTH_TENANT_SLUG_KEY, tenantSlug);
+        }
+    }, []);
 
     useEffect(() => {
         let active = true;
@@ -3447,19 +3592,37 @@ function App() {
                 const result = await getRedirectResult(auth);
                 const googleUser = result?.user;
 
+                sessionStorage.removeItem(AUTH_PROGRESS_KEY);
+                setIsAuthInProgress(false);
+
                 if (!googleUser?.email) {
                     return;
                 }
+
                 sessionStorage.removeItem(GOOGLE_AUTH_FLOW_KEY);
 
                 if (active) {
                     setShowLogin(false);
                     setCurrentPage('dashboard');
                 }
+
+                finalizeCentralizedLoginReturn();
             } catch (error) {
-                console.error("Erro ao processar retorno do login com Google:", error);
+                sessionStorage.removeItem(AUTH_PROGRESS_KEY);
+                setIsAuthInProgress(false);
+
+                if (error?.code === 'auth/cancelled-popup-request') {
+                    console.warn('[AUTH][GOOGLE_REDIRECT] Requisição cancelada por concorrência de popup:', error);
+                    return;
+                }
+
+                console.error('[AUTH][GOOGLE_REDIRECT] Erro ao processar retorno do login com Google:', {
+                    code: error?.code,
+                    message: error?.message,
+                    error,
+                });
                 if (active) {
-                    setLoginError('Ocorreu um erro ao entrar com Google.');
+                    setLoginError(mapAuthErrorToUserMessage(error));
                 }
             }
         };
@@ -3469,7 +3632,7 @@ function App() {
         return () => {
             active = false;
         };
-    }, []);
+    }, [finalizeCentralizedLoginReturn]);
     
     const handlePasswordReset = async () => {
         if (!passwordResetEmail) {
@@ -7419,7 +7582,7 @@ const handleSubmit = async (e) => {
                 </button>
                 {loginError && <p className="text-red-500 text-sm text-center">{loginError}</p>}
                 <div className="flex flex-col gap-4 pt-2">
-                    <Button onClick={handleLogin}>Entrar</Button>
+                    <Button onClick={handleLogin} disabled={isAuthInProgress}>{isAuthInProgress ? 'Entrando...' : 'Entrar'}</Button>
                     <div className="relative">
                         <div className="absolute inset-0 flex items-center">
                             <div className="w-full border-t border-gray-300" />
@@ -7428,7 +7591,7 @@ const handleSubmit = async (e) => {
                             <span className="bg-white px-2 text-gray-500">ou</span>
                         </div>
                     </div>
-                    <Button onClick={handleGoogleSignIn} variant="secondary">
+                    <Button onClick={handleGoogleSignIn} variant="secondary" disabled={isAuthInProgress}>
                         <svg className="w-5 h-5" viewBox="0 0 48 48">
                             <path fill="#EA4335" d="M24 9.5c3.54 0 6.71 1.22 9.21 3.6l6.85-6.85C35.9 2.38 30.47 0 24 0 14.62 0 6.51 5.38 2.56 13.22l7.98 6.19C12.43 13.72 17.74 9.5 24 9.5z"></path>
                             <path fill="#4285F4" d="M46.98 24.55c0-1.57-.15-3.09-.38-4.55H24v9.02h12.94c-.58 2.96-2.26 5.48-4.78 7.18l7.73 6c4.51-4.18 7.09-10.36 7.09-17.65z"></path>
