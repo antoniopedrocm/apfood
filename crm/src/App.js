@@ -3003,9 +3003,10 @@ function App() {
                                     setPendingOrders(activeOrders);
 
                                     if (initialDataLoaded.current) {
+                                          const isOverviewSelected = user.role === ROLE_OWNER && selectedStoreId === STORE_ALL_KEY;
                                           const newPendingOrdersDetected = changes.some(change => change.type === 'added' && change.doc.data().status === 'Pendente');
 
-                                          if (newPendingOrdersDetected && !isAlarmPlaying && !isSnoozedRef.current) {
+                                          if (newPendingOrdersDetected && !isOverviewSelected && !isAlarmPlaying && !isSnoozedRef.current) {
                                                 console.log('[App.js] Novo pedido pendente detectado pelo listener!');
                                                 setHasNewPendingOrders(true);
 
@@ -3031,6 +3032,9 @@ function App() {
                                                         console.error("[App.js] Erro ao tentar tocar alarme:", error);
                                                   }
                                                 })();
+                                          } else if (newPendingOrdersDetected && isOverviewSelected) {
+                                                // Sem alarme na Visão Geral.
+                                                stopAlarm();
                                           } else if (newPendingOrdersDetected && isSnoozedRef.current) {
                                                 console.log('[App.js] Alarme em modo soneca, não tocando agora.');
                                           } else if (newPendingOrdersDetected && isAlarmPlaying) {
@@ -3096,25 +3100,38 @@ function App() {
         }, [user, isAlarmPlaying, resolveStoreIdsForView, recomputeDataForView, selectedStoreId, availableStores, migrateLegacyConfigCollection]);
     // EFFECT PARA PARAR ALARME QUANDO NÃO HÁ MAIS PEDIDOS PENDENTES
     useEffect(() => {
-        const hasAnyPending = data.pedidos && data.pedidos.some(p => p.status === 'Pendente');
+        const isOverviewSelected = user?.role === ROLE_OWNER && selectedStoreId === STORE_ALL_KEY;
+        const hasPendingOrdersForSelectedStore = data.pedidos && data.pedidos.some(p => p.status === 'Pendente');
 
-        if (!hasAnyPending && !isAlarmSnoozed) {
+        if (isOverviewSelected) {
+          stopAlarm();
+          return;
+        }
+
+        if (!hasPendingOrdersForSelectedStore && !isAlarmSnoozed) {
           console.log('[App.js] Nenhum pedido pendente e não está em soneca. Parando alarme e escondendo banner.');
           setHasNewPendingOrders(false);
           stopAlarm();
         }
-    }, [data.pedidos, isAlarmSnoozed, stopAlarm]);
+    }, [data.pedidos, isAlarmSnoozed, selectedStoreId, stopAlarm, user]);
 
     // Garante que o alarme continue tocando enquanto houver pedidos pendentes
     useEffect(() => {
-        const hasPendingOrders = pendingOrders.some(order => order.status === 'Pendente');
+        const isOverviewSelected = user?.role === ROLE_OWNER && selectedStoreId === STORE_ALL_KEY;
+        const hasPendingOrdersForSelectedStore = pendingOrders.some(order => order.status === 'Pendente');
+        const shouldPlayAlarm = !isOverviewSelected && hasPendingOrdersForSelectedStore && !isAlarmSnoozed;
 
-        if (audioAllowed && hasPendingOrders && !isAlarmSnoozed && !isAlarmPlaying) {
+        if (!shouldPlayAlarm) {
+          stopAlarm();
+          return;
+        }
+
+        if (audioAllowed && !isAlarmPlaying) {
           console.log('[App.js] Pedidos pendentes encontrados enquanto o alarme estava parado. Reativando alarme.');
           setHasNewPendingOrders(true);
           playAlarmRef.current();
         }
-    }, [audioAllowed, pendingOrders, isAlarmSnoozed, isAlarmPlaying]);
+    }, [audioAllowed, pendingOrders, isAlarmSnoozed, isAlarmPlaying, selectedStoreId, stopAlarm, user]);
 
   // --- REMOVIDO: Antigo useEffect de desbloqueio ---
   // useEffect(() => { if (audioUnlocked && ...) ... });
