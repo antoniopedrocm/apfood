@@ -508,20 +508,20 @@ app.post("/frete/calcular", async (req, res) => {
 
 // Rota para verificar cupom
 app.post("/cupons/verificar", async (req, res) => {
-  const {codigo, totalCarrinho} = req.body;
-  const lojaId = requireStoreId(req, res);
-  if (!lojaId) return;
-  try {
-    const cupomCodigo = codigo.toUpperCase();
-    const cuponsCollection = getStoreConfigCollection(lojaId, "cupons");
-    let cupom = null;
-    let legacyCupomFound = false;
+    const { codigo, totalCarrinho } = req.body;
+    const lojaId = requireStoreId(req, res);
+    if (!lojaId) return;
+    try {
+        const cupomCodigo = codigo.toUpperCase();
+        const cuponsCollection = getStoreConfigCollection(lojaId, 'cupons');
+        let cupom = null;
+        let legacyCupomFound = false;
 
-    const newPathSnapshot = await cuponsCollection.where("codigo", "==", cupomCodigo).limit(1).get();
-    if (!newPathSnapshot.empty) {
-      const docSnap = newPathSnapshot.docs[0];
-      cupom = {id: docSnap.id, ...docSnap.data()};
-    }
+        const newPathSnapshot = await cuponsCollection.where('codigo', '==', cupomCodigo).limit(1).get();
+        if (!newPathSnapshot.empty) {
+            const docSnap = newPathSnapshot.docs[0];
+            cupom = { id: docSnap.id, ...docSnap.data() };
+        }
 
     if (!cupom) {
       const legacyConfigDoc = await getLegacyConfigDoc(lojaId, "cupons").get();
