@@ -46,6 +46,9 @@ const ROLE_MANAGER = 'gerente';
 const ROLE_ATTENDANT = 'atendente';
 const ROLE_DEFAULT = ROLE_ATTENDANT;
 const STORE_ALL_KEY = '__all__';
+const DEFAULT_ALARM_SNOOZE_MINUTES = 5;
+const MIN_ALARM_SNOOZE_MINUTES = 1;
+const MAX_ALARM_SNOOZE_MINUTES = 120;
 const DEFAULT_FORNECEDOR_CATEGORIES = ['Insumos', 'Embalagens', 'Bebidas', 'Decoração', 'Serviços'];
 const CONFIG_DOC_ID = 'config';
 const GOOGLE_AUTH_FLOW_KEY = 'google-auth-flow-in-progress';
@@ -95,6 +98,48 @@ const getStoreDocRef = (storeId, collectionName, docId, useLegacyPath = false) =
 };
 
 const getStoreConfigDocRef = (storeId) => doc(db, 'lojas', storeId, 'configuracoes', CONFIG_DOC_ID);
+
+const sanitizeAlarmSnoozeMinutes = (value, fallback = DEFAULT_ALARM_SNOOZE_MINUTES) => {
+  const parsed = Number(value);
+  if (!Number.isFinite(parsed)) return fallback;
+  const rounded = Math.round(parsed);
+  if (rounded < MIN_ALARM_SNOOZE_MINUTES || rounded > MAX_ALARM_SNOOZE_MINUTES) return fallback;
+  return rounded;
+};
+
+const getStoreAlarmSnoozeMinutes = async (storeId) => {
+  if (!storeId || storeId === STORE_ALL_KEY) {
+    return DEFAULT_ALARM_SNOOZE_MINUTES;
+  }
+
+  const configSnap = await getDoc(getStoreConfigDocRef(storeId));
+  if (!configSnap.exists()) {
+    return DEFAULT_ALARM_SNOOZE_MINUTES;
+  }
+
+  const data = configSnap.data() || {};
+  const resolvedValue = data.alarmSnoozeMinutes ?? data?.alarm?.snoozeMinutes;
+  return sanitizeAlarmSnoozeMinutes(resolvedValue);
+};
+
+const saveStoreAlarmSnoozeMinutes = async (storeId, minutes) => {
+  if (!storeId || storeId === STORE_ALL_KEY) {
+    throw new Error('Selecione uma loja válida para salvar a configuração do alarme.');
+  }
+
+  const normalizedMinutes = sanitizeAlarmSnoozeMinutes(minutes);
+  await setDoc(getStoreConfigDocRef(storeId), { alarmSnoozeMinutes: normalizedMinutes }, { merge: true });
+  return normalizedMinutes;
+};
+
+const resolveStoreAlarmSnoozeMinutes = (selectedStoreId, storeSettingsMap, defaultValue = DEFAULT_ALARM_SNOOZE_MINUTES) => {
+  if (!selectedStoreId || selectedStoreId === STORE_ALL_KEY) {
+    return defaultValue;
+  }
+
+  const configuredValue = storeSettingsMap?.[selectedStoreId];
+  return sanitizeAlarmSnoozeMinutes(configuredValue, defaultValue);
+};
 
 const getTenantSlugFromHostname = (hostname = '') => {
   const normalizedHost = (hostname || '').toLowerCase();
@@ -2272,6 +2317,7 @@ function App() {
   
   const [availableStores, setAvailableStores] = useState([]);
   const [storeInfoMap, setStoreInfoMap] = useState({});
+  const [storeAlarmSnoozeMap, setStoreAlarmSnoozeMap] = useState({});
   const [selectedStoreId, setSelectedStoreId] = usePersistentState('selectedStoreId', null);
   const [showStoreManager, setShowStoreManager] = useState(false);
   const [isCreatingStore, setIsCreatingStore] = useState(false);
@@ -2854,12 +2900,14 @@ function App() {
   
   // FUNÇÃO PARA PARAR E ATIVAR SONEÇA - Refatorada
   const handleStopAndSnoozeAlarm = useCallback(() => {
-    console.log('[App.js] Ativando soneca...');
+    const snoozeMinutes = resolveStoreAlarmSnoozeMinutes(selectedStoreId, storeAlarmSnoozeMap, DEFAULT_ALARM_SNOOZE_MINUTES);
+
+    console.log(`[App.js] Ativando soneca por ${snoozeMinutes} minuto(s)...`);
     stopAlarm(); // Para o alarme atual
 	setStopAlarmFn(null); // Limpa o estado da função de parada
     setIsAlarmSnoozed(true); // Ativa o estado de soneca
     
-    const endTime = new Date().getTime() + (5 * 60 * 1000); // 5 minutos a partir de agora
+    const endTime = new Date().getTime() + (snoozeMinutes * 60 * 1000);
     setSnoozeEndTime(endTime); // Define o tempo final da soneca
     
     // Limpa timer anterior se existir
@@ -2890,7 +2938,7 @@ function App() {
       } 
       // O display do timer é gerenciado localmente pelo Dashboard
     }, 1000); // Atualiza a cada segundo
-  }, [stopAlarm]); // Removidas dependências instáveis (data, playAlarm, unlockAudio)
+  }, [selectedStoreId, stopAlarm, storeAlarmSnoozeMap]); // Removidas dependências instáveis (data, playAlarm, unlockAudio)
 
   // EFFECT PARA SINCRONIZAR DADOS DO FIREBASE
         useEffect(() => {
@@ -3352,6 +3400,7 @@ function App() {
                   clientesDataRef.current = [];
                   setAvailableStores([]);
                   setStoreInfoMap({});
+                  setStoreAlarmSnoozeMap({});
                   setSelectedStoreId(null);
 				  setShowStoreManager(false);
                   setIsCreatingStore(false);
@@ -3373,6 +3422,7 @@ function App() {
                 if (isMounted) {
                     setAvailableStores([]);
                     setStoreInfoMap({});
+                    setStoreAlarmSnoozeMap({});
                     storeCollectionsDataRef.current = {};
                     setSelectedStoreId(null);
                 }
@@ -3469,6 +3519,46 @@ function App() {
         };
 
         loadStoreInfos();
+
+        return () => {
+            active = false;
+        };
+    }, [availableStores]);
+
+    useEffect(() => {
+        let active = true;
+
+        const loadStoreAlarmSnoozeSettings = async () => {
+            if (!availableStores.length) {
+                if (active) {
+                    setStoreAlarmSnoozeMap({});
+                }
+                return;
+            }
+
+            try {
+                const entries = await Promise.all(availableStores.map(async (storeId) => {
+                    try {
+                        const minutes = await getStoreAlarmSnoozeMinutes(storeId);
+                        return [storeId, minutes];
+                    } catch (error) {
+                        console.error(`[App.js] Erro ao carregar soneca do alarme da loja ${storeId}:`, error);
+                        return [storeId, DEFAULT_ALARM_SNOOZE_MINUTES];
+                    }
+                }));
+
+                if (active) {
+                    setStoreAlarmSnoozeMap(Object.fromEntries(entries));
+                }
+            } catch (error) {
+                console.error('[App.js] Erro geral ao buscar configurações de soneca do alarme:', error);
+                if (active) {
+                    setStoreAlarmSnoozeMap({});
+                }
+            }
+        };
+
+        loadStoreAlarmSnoozeSettings();
 
         return () => {
             active = false;
@@ -5289,8 +5379,11 @@ function App() {
     );
   };
   
-	const Configuracoes = ({ user, setConfirmDelete, data, addItem, updateItem, deleteItem, availableStores, storeInfoMap, resolveActiveStoreForWrite, selectedStoreId }) => {
+	const Configuracoes = ({ user, setConfirmDelete, data, addItem, updateItem, deleteItem, availableStores, storeInfoMap, resolveActiveStoreForWrite, selectedStoreId, storeAlarmSnoozeMap, onSaveStoreAlarmSnoozeMinutes, canManageStoreAlarmConfig }) => {
     const [activeTab, setActiveTab] = usePersistentState('configuracoes_activeTab', 'users');
+    const [alarmSnoozeInput, setAlarmSnoozeInput] = useState(String(DEFAULT_ALARM_SNOOZE_MINUTES));
+    const [isSavingAlarmSnooze, setIsSavingAlarmSnooze] = useState(false);
+    const [alarmSnoozeMessage, setAlarmSnoozeMessage] = useState(null);
 
     // States para Usuários
     const [usuarios, setUsuarios] = useState([]);
@@ -5336,6 +5429,23 @@ const effectiveStoreName = useMemo(() => {
 	}
 	return 'Selecione uma loja para gerenciar';
 }, [effectiveStoreId, storeInfoMap, user, selectedStoreId]);
+
+    const canEditAlarmSnooze = useMemo(() => {
+        if (!effectiveStoreId) return false;
+        return canManageStoreAlarmConfig(effectiveStoreId);
+    }, [canManageStoreAlarmConfig, effectiveStoreId]);
+
+    useEffect(() => {
+        if (!effectiveStoreId) {
+            setAlarmSnoozeInput(String(DEFAULT_ALARM_SNOOZE_MINUTES));
+            setAlarmSnoozeMessage(null);
+            return;
+        }
+
+        const resolved = resolveStoreAlarmSnoozeMinutes(effectiveStoreId, storeAlarmSnoozeMap, DEFAULT_ALARM_SNOOZE_MINUTES);
+        setAlarmSnoozeInput(String(resolved));
+        setAlarmSnoozeMessage(null);
+    }, [effectiveStoreId, storeAlarmSnoozeMap]);
 
     // States para Cupons
     const [cupons, setCupons] = useState([]);
@@ -5804,6 +5914,40 @@ const effectiveStoreName = useMemo(() => {
       }
     };
 
+    const handleSaveAlarmSnoozeConfig = async (e) => {
+        e.preventDefault();
+
+        if (!effectiveStoreId) {
+            setAlarmSnoozeMessage({ type: 'error', text: 'Selecione uma loja para configurar.' });
+            return;
+        }
+
+        if (!canEditAlarmSnooze) {
+            setAlarmSnoozeMessage({ type: 'error', text: 'Você não tem permissão para alterar esta configuração.' });
+            return;
+        }
+
+        const parsedMinutes = Number(alarmSnoozeInput);
+        if (!Number.isFinite(parsedMinutes) || parsedMinutes < MIN_ALARM_SNOOZE_MINUTES || parsedMinutes > MAX_ALARM_SNOOZE_MINUTES) {
+            setAlarmSnoozeMessage({ type: 'error', text: `Informe um valor entre ${MIN_ALARM_SNOOZE_MINUTES} e ${MAX_ALARM_SNOOZE_MINUTES} minutos.` });
+            return;
+        }
+
+        setIsSavingAlarmSnooze(true);
+        setAlarmSnoozeMessage(null);
+
+        try {
+            const savedMinutes = await onSaveStoreAlarmSnoozeMinutes(effectiveStoreId, parsedMinutes);
+            setAlarmSnoozeInput(String(savedMinutes));
+            setAlarmSnoozeMessage({ type: 'success', text: 'Tempo de pausa do alarme salvo com sucesso.' });
+        } catch (error) {
+            console.error('[Configurações] Erro ao salvar tempo de soneca do alarme:', error);
+            setAlarmSnoozeMessage({ type: 'error', text: 'Não foi possível salvar agora. Tente novamente.' });
+        } finally {
+            setIsSavingAlarmSnooze(false);
+        }
+    };
+
     const handleSaveFreteConfig = async (e) => {
         e.preventDefault();
         setIsSavingFrete(true);
@@ -5950,7 +6094,7 @@ const effectiveStoreName = useMemo(() => {
         <div className="p-4 md:p-6 space-y-6 bg-gradient-to-br from-pink-50/30 to-rose-50/30 min-h-screen">
             <div>
               <h1 className="text-3xl font-bold text-gray-800">Configurações</h1>
-              <p className="text-gray-600 mt-1">Gerencie usuários, cupons, frete e visualize os logs do sistema</p>
+              <p className="text-gray-600 mt-1">Gerencie usuários, cupons, frete, alarme e visualize os logs do sistema</p>
             </div>
 
             <div className="bg-white rounded-2xl shadow-lg border border-gray-100 p-2">
@@ -5963,6 +6107,9 @@ const effectiveStoreName = useMemo(() => {
                     </button>
                     <button onClick={() => setActiveTab('frete')} className={`px-4 py-2 rounded-lg text-sm font-semibold transition-colors ${activeTab === 'frete' ? 'bg-pink-600 text-white' : 'hover:bg-pink-100'}`}>
                         Frete
+                    </button>
+                    <button onClick={() => setActiveTab('alarme')} className={`px-4 py-2 rounded-lg text-sm font-semibold transition-colors ${activeTab === 'alarme' ? 'bg-pink-600 text-white' : 'hover:bg-pink-100'}`}>
+                        Alarme
                     </button>
                     <button onClick={() => setActiveTab('logs')} className={`px-4 py-2 rounded-lg text-sm font-semibold transition-colors ${activeTab === 'logs' ? 'bg-pink-600 text-white' : 'hover:bg-pink-100'}`}>
                         Logs de Atividade
@@ -6068,6 +6215,45 @@ const effectiveStoreName = useMemo(() => {
                     </>
                 )}
               </div>
+            )}
+
+            {activeTab === 'alarme' && (
+                !effectiveStoreId ? (
+                    <div className="mt-6 bg-white rounded-2xl shadow-lg border border-gray-100 p-6 text-center text-gray-500">
+                        Selecione uma loja para configurar o tempo de pausa do alarme.
+                    </div>
+                ) : (
+                    <div className="mt-6 bg-white rounded-2xl shadow-lg border border-gray-100 p-6 max-w-xl">
+                        <form onSubmit={handleSaveAlarmSnoozeConfig} className="space-y-4">
+                            <h3 className="text-xl font-bold text-gray-800">Tempo de pausa do alarme</h3>
+                            <p className="text-sm text-gray-500">
+                                Loja atual: <strong>{effectiveStoreName}</strong>. Defina por quantos minutos o alarme ficará em soneca.
+                            </p>
+                            <Input
+                                label="Tempo de pausa (minutos)"
+                                type="number"
+                                min={MIN_ALARM_SNOOZE_MINUTES}
+                                max={MAX_ALARM_SNOOZE_MINUTES}
+                                value={alarmSnoozeInput}
+                                onChange={(e) => setAlarmSnoozeInput(e.target.value)}
+                                disabled={!canEditAlarmSnooze || isSavingAlarmSnooze}
+                            />
+                            {!canEditAlarmSnooze && (
+                                <p className="text-sm text-amber-600">Você não tem permissão para editar esta configuração.</p>
+                            )}
+                            {alarmSnoozeMessage && (
+                                <p className={`text-sm ${alarmSnoozeMessage.type === 'success' ? 'text-green-600' : 'text-red-600'}`}>
+                                    {alarmSnoozeMessage.text}
+                                </p>
+                            )}
+                            <div className="pt-2">
+                                <Button type="submit" disabled={!canEditAlarmSnooze || isSavingAlarmSnooze}>
+                                    <Save className="w-4 h-4" /> {isSavingAlarmSnooze ? 'Salvando...' : 'Salvar tempo de pausa'}
+                                </Button>
+                            </div>
+                        </form>
+                    </div>
+                )
             )}
 
             {activeTab === 'logs' && (
@@ -7300,6 +7486,31 @@ const handleSubmit = async (e) => {
     return ids.length ? ids[0] : null;
   }, [user, selectedStoreId, resolveStoreIdsForView]);
 
+
+  const canManageStoreAlarmConfig = useCallback((storeId) => {
+    if (!user || !storeId || storeId === STORE_ALL_KEY) return false;
+
+    if (user.role === ROLE_OWNER) return true;
+    if (user.role !== ROLE_MANAGER) return false;
+
+    const allowedStores = new Set([
+      ...(Array.isArray(user.lojaIds) ? user.lojaIds : []),
+      user.lojaId,
+    ].filter(Boolean));
+
+    return allowedStores.has(storeId);
+  }, [user]);
+
+  const handleSaveStoreAlarmSnoozeMinutes = useCallback(async (storeId, minutes) => {
+    if (!canManageStoreAlarmConfig(storeId)) {
+      throw new Error('Você não tem permissão para alterar o tempo de pausa desta loja.');
+    }
+
+    const normalizedMinutes = await saveStoreAlarmSnoozeMinutes(storeId, minutes);
+    setStoreAlarmSnoozeMap((prev) => ({ ...prev, [storeId]: normalizedMinutes }));
+    return normalizedMinutes;
+  }, [canManageStoreAlarmConfig]);
+
   const renderCurrentPage = () => {
     if (authLoading || (loading && user)) {
       return (<div className="flex h-full w-full items-center justify-center"><div className="animate-spin rounded-full h-16 w-16 border-t-2 border-b-2 border-pink-500"></div></div>);
@@ -7329,9 +7540,9 @@ const handleSubmit = async (e) => {
         />
       ) : <PaginaInicial />;
           case 'financeiro': return userHasPermission('financeiro') ? <Financeiro data={data} addItem={addItem} updateItem={updateItem} deleteItem={deleteItem} setConfirmDelete={setConfirmDelete} /> : <PaginaInicial />;
-      case 'configuracoes': return userHasPermission('configuracoes') ? <Configuracoes user={user} setConfirmDelete={setConfirmDelete} data={data} addItem={addItem} updateItem={updateItem} deleteItem={deleteItem} availableStores={availableStores} storeInfoMap={storeInfoMap} resolveActiveStoreForWrite={resolveActiveStoreForWrite} selectedStoreId={selectedStoreId} /> : <PaginaInicial />;
+      case 'configuracoes': return userHasPermission('configuracoes') ? <Configuracoes user={user} setConfirmDelete={setConfirmDelete} data={data} addItem={addItem} updateItem={updateItem} deleteItem={deleteItem} availableStores={availableStores} storeInfoMap={storeInfoMap} resolveActiveStoreForWrite={resolveActiveStoreForWrite} selectedStoreId={selectedStoreId} storeAlarmSnoozeMap={storeAlarmSnoozeMap} onSaveStoreAlarmSnoozeMinutes={handleSaveStoreAlarmSnoozeMinutes} canManageStoreAlarmConfig={canManageStoreAlarmConfig} /> : <PaginaInicial />;
       case 'financeiro': return user?.role === 'admin' ? <Financeiro data={data} addItem={addItem} updateItem={updateItem} deleteItem={deleteItem} setConfirmDelete={setConfirmDelete} /> : <PaginaInicial />;
-      case 'configuracoes': return user?.role === 'admin' ? <Configuracoes user={user} setConfirmDelete={setConfirmDelete} data={data} addItem={addItem} updateItem={updateItem} deleteItem={deleteItem} /> : <PaginaInicial />;
+      case 'configuracoes': return user?.role === 'admin' ? <Configuracoes user={user} setConfirmDelete={setConfirmDelete} data={data} addItem={addItem} updateItem={updateItem} deleteItem={deleteItem} availableStores={availableStores} storeInfoMap={storeInfoMap} resolveActiveStoreForWrite={resolveActiveStoreForWrite} selectedStoreId={selectedStoreId} storeAlarmSnoozeMap={storeAlarmSnoozeMap} onSaveStoreAlarmSnoozeMinutes={handleSaveStoreAlarmSnoozeMinutes} canManageStoreAlarmConfig={canManageStoreAlarmConfig} /> : <PaginaInicial />;
       default: return user ? <PlaceholderPage title={allMenuItems.find(i=>i.id===currentPage)?.label || "Página"} /> : <PaginaInicial />;
     }
   };
