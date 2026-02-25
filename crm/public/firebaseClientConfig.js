@@ -31,7 +31,7 @@ import {
 // These credentials correspond to the Ana Guimarães project hosted on
 // Firebase.  Replace them only if you migrate the project to a new
 // Firebase account.
-const GOOGLE_API_KEY = 'AIzaSyAIdbF2EgdbZSPqBaQhi1pnNb4t5xauwEc';
+const GOOGLE_API_KEY = 'AIzaSyD_otNB81Of8fcsOPpCf_PvawQeVNF2Hkw';
 
 const firebaseConfig = {
   apiKey: GOOGLE_API_KEY,
