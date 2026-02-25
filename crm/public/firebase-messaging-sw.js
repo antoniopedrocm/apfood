@@ -96,7 +96,7 @@ self.addEventListener('fetch', (event) => {
 importScripts('https://www.gstatic.com/firebasejs/10.8.0/firebase-app-compat.js');
 importScripts('https://www.gstatic.com/firebasejs/10.8.0/firebase-messaging-compat.js');
 
-const GOOGLE_API_KEY = 'AIzaSyAIdbF2EgdbZSPqBaQhi1pnNb4t5xauwEc';
+const GOOGLE_API_KEY = 'AIzaSyD_otNB81Of8fcsOPpCf_PvawQeVNF2Hkw';
 
 const firebaseConfig = {
   apiKey: GOOGLE_API_KEY,

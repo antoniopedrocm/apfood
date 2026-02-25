@@ -20,7 +20,7 @@ import {
 // development working out of the box.
 const envVar = (key) => process.env[key] || import.meta.env?.[key] || '';
 
-const GOOGLE_API_KEY = 'AIzaSyAIdbF2EgdbZSPqBaQhi1pnNb4t5xauwEc';
+const GOOGLE_API_KEY = 'AIzaSyD_otNB81Of8fcsOPpCf_PvawQeVNF2Hkw';
 
 const firebaseConfig = {
   apiKey: envVar('REACT_APP_FIREBASE_API_KEY') || GOOGLE_API_KEY,
