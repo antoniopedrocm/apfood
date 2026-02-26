@@ -13,47 +13,73 @@ const DAYS = [
   ['sun', 'Domingo'],
 ];
 
-const cloneOperacao = (operacao) => ({
-  ...DEFAULT_OPERACAO,
-  ...(operacao || {}),
-  schedule: {
-    ...DEFAULT_OPERACAO.schedule,
-    ...(operacao?.schedule || {}),
-    weekly: {
-      ...DEFAULT_OPERACAO.schedule.weekly,
-      ...(operacao?.schedule?.weekly || {}),
+const normalizeConfig = (storeConfig) => {
+  const source = storeConfig?.storeAvailability || storeConfig?.operacao || storeConfig || {};
+  return {
+    ...DEFAULT_OPERACAO,
+    ...source,
+    schedule: {
+      ...DEFAULT_OPERACAO.schedule,
+      ...(source.schedule || {}),
     },
-  },
-  override: {
-    ...DEFAULT_OPERACAO.override,
-    ...(operacao?.override || {}),
-  },
-});
+    manualOverride: {
+      ...DEFAULT_OPERACAO.manualOverride,
+      ...(source.manualOverride || {}),
+    },
+  };
+};
 
-export const StoreOperatingHoursPanel = ({ storeId, currentOperacao, user }) => {
-  const canEdit = useMemo(() => ['ADMIN', 'MANAGER', 'dono', 'gerente'].includes(user?.role), [user]);
-  const [form, setForm] = useState(() => cloneOperacao(currentOperacao));
+export const StoreOperatingHoursPanel = ({ storeId, currentStoreConfig, user }) => {
+  const canEdit = useMemo(() => ['ADMIN', 'MANAGER', 'dono', 'gerente', 'owner', 'manager'].includes(user?.role), [user]);
+  const [form, setForm] = useState(() => normalizeConfig(currentStoreConfig));
   const [saving, setSaving] = useState(false);
 
-  const updateRange = (day, index, key, value) => {
-    setForm((prev) => {
-      const weekly = { ...prev.schedule.weekly };
-      const ranges = [...(weekly[day] || [])];
-      ranges[index] = { ...ranges[index], [key]: value };
-      weekly[day] = ranges;
-      return { ...prev, schedule: { ...prev.schedule, weekly } };
-    });
+  const updateDay = (day, key, value) => {
+    setForm((prev) => ({
+      ...prev,
+      schedule: {
+        ...prev.schedule,
+        [day]: {
+          ...(prev.schedule?.[day] || {}),
+          [key]: value,
+        },
+      },
+    }));
+  };
+
+  const setOverrideMode = (mode) => {
+    setForm((prev) => ({
+      ...prev,
+      manualOverride: {
+        ...prev.manualOverride,
+        mode,
+      },
+    }));
   };
 
   const save = async () => {
     if (!canEdit || !storeId) return;
     setSaving(true);
     try {
-      await setDoc(doc(db, 'stores', storeId), {
-        operacao: form,
-        updatedAt: serverTimestamp(),
-        updatedBy: user?.uid || null,
-      }, { merge: true });
+      const payload = {
+        ...form,
+        manualOverride: {
+          ...form.manualOverride,
+          updatedAt: serverTimestamp(),
+          updatedBy: user?.uid || user?.auth?.uid || null,
+        },
+      };
+
+      await setDoc(
+        doc(db, 'lojas', storeId),
+        {
+          storeAvailability: payload,
+          operacao: payload,
+          updatedAt: serverTimestamp(),
+          updatedBy: user?.uid || user?.auth?.uid || null,
+        },
+        { merge: true }
+      );
     } finally {
       setSaving(false);
     }
@@ -62,61 +88,51 @@ export const StoreOperatingHoursPanel = ({ storeId, currentOperacao, user }) => 
   return (
     <section className="rounded-xl border border-slate-200 bg-white p-4 shadow-sm">
       <div className="mb-4 flex items-center justify-between">
-        <h3 className="text-lg font-semibold">Disponibilidade da loja</h3>
-        <label className="inline-flex items-center gap-2 text-sm">
-          <span>Ativo</span>
-          <button
-            type="button"
-            disabled={!canEdit}
-            onClick={() => setForm((prev) => ({ ...prev, manualOpen: !prev.manualOpen }))}
-            className={`relative h-6 w-11 rounded-full transition ${form.manualOpen ? 'bg-green-500' : 'bg-slate-300'}`}
-          >
-            <span className={`absolute top-0.5 h-5 w-5 rounded-full bg-white transition ${form.manualOpen ? 'left-5' : 'left-0.5'}`} />
-          </button>
-        </label>
+        <h3 className="text-lg font-semibold">Horário de funcionamento</h3>
       </div>
 
       <div className="mb-3">
-        <label className="text-sm font-medium">Timezone</label>
-        <input className="mt-1 w-full rounded border p-2" value={form.schedule.timezone} onChange={(e) => setForm((p) => ({ ...p, schedule: { ...p.schedule, timezone: e.target.value } }))} />
+        <label className="text-sm font-medium">Fuso horário</label>
+        <input
+          className="mt-1 w-full rounded border p-2"
+          value={form.timezone || 'America/Sao_Paulo'}
+          onChange={(e) => setForm((p) => ({ ...p, timezone: e.target.value }))}
+        />
       </div>
 
-      <div className="space-y-3">
-        {DAYS.map(([key, label]) => (
-          <div key={key} className="rounded border p-3">
-            <div className="mb-2 flex items-center justify-between">
-              <strong>{label}</strong>
-              <button type="button" onClick={() => setForm((prev) => ({ ...prev, schedule: { ...prev.schedule, weekly: { ...prev.schedule.weekly, [key]: [...(prev.schedule.weekly[key] || []), { start: '08:00', end: '18:00' }] } } }))} className="text-sm text-pink-600">+ faixa</button>
-            </div>
-            {(form.schedule.weekly[key] || []).map((range, index) => (
-              <div key={`${key}-${index}`} className="mb-2 flex items-center gap-2">
-                <input type="time" value={range.start} onChange={(e) => updateRange(key, index, 'start', e.target.value)} className="rounded border p-1" />
-                <span>até</span>
-                <input type="time" value={range.end} onChange={(e) => updateRange(key, index, 'end', e.target.value)} className="rounded border p-1" />
-                <button type="button" onClick={() => setForm((prev) => ({ ...prev, schedule: { ...prev.schedule, weekly: { ...prev.schedule.weekly, [key]: (prev.schedule.weekly[key] || []).filter((_, i) => i !== index) } } }))} className="text-xs text-red-600">remover</button>
-              </div>
-            ))}
-          </div>
-        ))}
-      </div>
-
-      <div className="mt-4 rounded border p-3">
-        <label className="mb-2 flex items-center gap-2 text-sm font-medium">
-          <input type="checkbox" checked={!!form.override.enabled} onChange={(e) => setForm((prev) => ({ ...prev, override: { ...prev.override, enabled: e.target.checked } }))} />
-          Override ativo
-        </label>
-        <div className="grid gap-2 sm:grid-cols-3">
-          <select value={form.override.mode} onChange={(e) => setForm((prev) => ({ ...prev, override: { ...prev.override, mode: e.target.value } }))} className="rounded border p-2">
-            <option value="CLOSED">Forçar fechado</option>
-            <option value="OPEN">Forçar aberto</option>
-          </select>
-          <input placeholder="Motivo" value={form.override.reason || ''} onChange={(e) => setForm((prev) => ({ ...prev, override: { ...prev.override, reason: e.target.value } }))} className="rounded border p-2" />
-          <input type="datetime-local" onChange={(e) => setForm((prev) => ({ ...prev, override: { ...prev.override, until: e.target.value ? new Date(e.target.value) : null } }))} className="rounded border p-2" />
+      <div className="mb-4 rounded border p-3">
+        <p className="mb-2 text-sm font-medium text-slate-700">Status da loja (override manual)</p>
+        <div className="flex flex-wrap gap-2">
+          <button type="button" onClick={() => setOverrideMode('auto')} className={`rounded px-3 py-2 text-sm ${form.manualOverride.mode === 'auto' ? 'bg-slate-900 text-white' : 'bg-slate-100 text-slate-700'}`}>Automático</button>
+          <button type="button" onClick={() => setOverrideMode('force_open')} className={`rounded px-3 py-2 text-sm ${form.manualOverride.mode === 'force_open' ? 'bg-green-600 text-white' : 'bg-green-100 text-green-800'}`}>Abrir agora</button>
+          <button type="button" onClick={() => setOverrideMode('force_closed')} className={`rounded px-3 py-2 text-sm ${form.manualOverride.mode === 'force_closed' ? 'bg-red-600 text-white' : 'bg-red-100 text-red-800'}`}>Fechar agora</button>
         </div>
       </div>
 
+      <div className="space-y-3">
+        {DAYS.map(([key, label]) => {
+          const day = form.schedule?.[key] || { enabled: false, open: '08:00', close: '18:00' };
+          return (
+            <div key={key} className="rounded border p-3">
+              <div className="mb-2 flex items-center justify-between">
+                <strong>{label}</strong>
+                <label className="flex items-center gap-2 text-sm">
+                  <input type="checkbox" checked={Boolean(day.enabled)} onChange={(e) => updateDay(key, 'enabled', e.target.checked)} />
+                  Aberto neste dia
+                </label>
+              </div>
+              <div className="flex items-center gap-2">
+                <input type="time" value={day.open || '08:00'} onChange={(e) => updateDay(key, 'open', e.target.value)} className="rounded border p-1" disabled={!day.enabled} />
+                <span>até</span>
+                <input type="time" value={day.close || '18:00'} onChange={(e) => updateDay(key, 'close', e.target.value)} className="rounded border p-1" disabled={!day.enabled} />
+              </div>
+            </div>
+          );
+        })}
+      </div>
+
       <button type="button" disabled={!canEdit || saving} onClick={save} className="mt-4 rounded bg-pink-600 px-4 py-2 text-white disabled:opacity-60">
-        {saving ? 'Salvando...' : 'Salvar operação'}
+        {saving ? 'Salvando...' : 'Salvar horário'}
       </button>
     </section>
   );

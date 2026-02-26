@@ -439,6 +439,16 @@ app.post("/pedidos", async (req, res) => {
   const lojaId = requireStoreId(req, res);
   if (!lojaId) return;
   try {
+    const storeSnap = await db.collection("lojas").doc(lojaId).get();
+    if (!storeSnap.exists) {
+      return res.status(404).json({code: "STORE_NOT_FOUND", message: "Loja não encontrada."});
+    }
+
+    const status = isStoreOpenNow(storeSnap.data() || {}, new Date());
+    if (!status.isOpen) {
+      return res.status(409).json({code: "STORE_CLOSED", message: status.message || "A loja está fechada no momento. Volte em nosso horário de atendimento."});
+    }
+
     const newOrder = {
       ...req.body,
       lojaId,
@@ -947,14 +957,14 @@ exports.createOrder = onCall(async (request) => {
     throw new HttpsError("invalid-argument", "storeId é obrigatório.");
   }
 
-  const storeRef = db.collection("stores").doc(storeId);
+  const storeRef = db.collection("lojas").doc(storeId);
   const storeSnap = await storeRef.get();
   if (!storeSnap.exists) {
     throw new HttpsError("not-found", "Loja não encontrada.");
   }
 
   const storeData = storeSnap.data() || {};
-  const status = isStoreOpenNow(storeData.operacao || {}, new Date(), storeData?.operacao?.schedule?.timezone);
+  const status = isStoreOpenNow(storeData, new Date());
 
   if (!status.isOpen) {
     throw new HttpsError("failed-precondition", "STORE_CLOSED", {

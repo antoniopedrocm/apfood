@@ -1,18 +1,5 @@
 const WEEKDAY_KEYS = ['sun', 'mon', 'tue', 'wed', 'thu', 'fri', 'sat'];
 const DEFAULT_TIMEZONE = 'America/Sao_Paulo';
-const DAY_MINUTES = 24 * 60;
-
-const toTimestampMillis = (value) => {
-  if (!value) return null;
-  if (typeof value.toMillis === 'function') return value.toMillis();
-  if (value instanceof Date) return value.getTime();
-  if (typeof value === 'number') return value;
-  if (typeof value === 'string') {
-    const parsed = Date.parse(value);
-    return Number.isNaN(parsed) ? null : parsed;
-  }
-  return null;
-};
 
 const parseTimeToMinutes = (hhmm) => {
   if (typeof hhmm !== 'string') return null;
@@ -21,20 +8,11 @@ const parseTimeToMinutes = (hhmm) => {
   return h * 60 + m;
 };
 
-const formatMinutes = (minutes) => {
-  const h = Math.floor(minutes / 60).toString().padStart(2, '0');
-  const m = (minutes % 60).toString().padStart(2, '0');
-  return `${h}:${m}`;
-};
-
 const getZonedParts = (date, timezone = DEFAULT_TIMEZONE) => {
   const formatter = new Intl.DateTimeFormat('en-US', {
     timeZone: timezone,
     hour12: false,
     weekday: 'short',
-    year: 'numeric',
-    month: '2-digit',
-    day: '2-digit',
     hour: '2-digit',
     minute: '2-digit',
   });
@@ -53,101 +31,112 @@ const getZonedParts = (date, timezone = DEFAULT_TIMEZONE) => {
   };
 };
 
-const getDayIntervals = (storeOperacao, weekdayKey) => {
-  const intervals = storeOperacao?.schedule?.weekly?.[weekdayKey];
-  return Array.isArray(intervals) ? intervals : [];
+const resolveScheduleDay = (storeConfig, weekdayKey) => {
+  const dayConfig = storeConfig?.schedule?.[weekdayKey];
+  if (dayConfig && typeof dayConfig === 'object' && !Array.isArray(dayConfig)) {
+    return {
+      enabled: Boolean(dayConfig.enabled),
+      open: dayConfig.open || '08:00',
+      close: dayConfig.close || '18:00',
+    };
+  }
+
+  const legacyRanges = Array.isArray(storeConfig?.schedule?.weekly?.[weekdayKey]) ? storeConfig.schedule.weekly[weekdayKey] : [];
+  const firstRange = legacyRanges[0];
+  if (firstRange) {
+    return {
+      enabled: true,
+      open: firstRange.start || '08:00',
+      close: firstRange.end || '18:00',
+    };
+  }
+
+  return { enabled: false, open: '08:00', close: '18:00' };
 };
 
-export const getNextOpeningTime = (storeOperacao, now = new Date(), timezone = DEFAULT_TIMEZONE) => {
+const getNextOpeningTime = (storeConfig, now = new Date(), timezone = DEFAULT_TIMEZONE) => {
   const zoned = getZonedParts(now, timezone);
   const nowMinutes = zoned.hour * 60 + zoned.minute;
 
   for (let offset = 0; offset < 7; offset += 1) {
     const weekdayKey = WEEKDAY_KEYS[(zoned.weekdayIndex + offset) % 7];
-    const intervals = getDayIntervals(storeOperacao, weekdayKey);
+    const day = resolveScheduleDay(storeConfig, weekdayKey);
+    if (!day.enabled) continue;
 
-    const sorted = intervals
-      .map((range) => ({ ...range, startMinutes: parseTimeToMinutes(range.start) }))
-      .filter((range) => range.startMinutes !== null)
-      .sort((a, b) => a.startMinutes - b.startMinutes);
-
-    const next = sorted.find((range) => (offset > 0 ? true : range.startMinutes > nowMinutes));
-    if (next) {
-      return { dayOffset: offset, start: next.start, label: formatMinutes(next.startMinutes) };
+    const start = parseTimeToMinutes(day.open);
+    if (start === null) continue;
+    if (offset > 0 || start > nowMinutes) {
+      return { dayOffset: offset, start: day.open, label: day.open };
     }
   }
 
   return null;
 };
 
-export const isStoreOpenNow = (storeOperacao, now = new Date(), timezoneInput) => {
-  const timezone = timezoneInput || storeOperacao?.schedule?.timezone || DEFAULT_TIMEZONE;
-  const manualOpen = storeOperacao?.manualOpen !== false;
-  const override = storeOperacao?.override || {};
-  const overrideUntil = toTimestampMillis(override?.until);
-  const hasValidOverride = Boolean(override?.enabled) && (!overrideUntil || overrideUntil > now.getTime());
+export const isStoreOpenNow = (rawStoreConfig, now = new Date()) => {
+  const storeConfig = rawStoreConfig?.storeAvailability || rawStoreConfig || {};
+  const timezone = storeConfig?.timezone || storeConfig?.schedule?.timezone || DEFAULT_TIMEZONE;
+  const mode = storeConfig?.manualOverride?.mode || 'auto';
 
-  if (hasValidOverride) {
-    if (override.mode === 'CLOSED') {
-      return {
-        isOpen: false,
-        message: override.reason?.trim() || 'Loja fechada no momento',
-        reason: override.reason?.trim() || null,
-      };
-    }
-
-    if (override.mode === 'OPEN') {
-      return { isOpen: true, message: 'Loja aberta por exceção' };
-    }
+  if (mode === 'force_open') {
+    return { isOpen: true, message: 'Loja aberta por ação do gestor' };
   }
-
-  if (!manualOpen) {
-    return { isOpen: false, message: 'Loja fechada (pausada pelo gestor)' };
+  if (mode === 'force_closed') {
+    return { isOpen: false, message: 'A loja está fechada no momento. Volte em nosso horário de atendimento.' };
   }
 
   const zoned = getZonedParts(now, timezone);
   const weekdayKey = WEEKDAY_KEYS[zoned.weekdayIndex];
   const nowMinutes = zoned.hour * 60 + zoned.minute;
-  const intervals = getDayIntervals(storeOperacao, weekdayKey)
-    .map((range) => ({
-      ...range,
-      startMinutes: parseTimeToMinutes(range.start),
-      endMinutes: parseTimeToMinutes(range.end),
-    }))
-    .filter((range) => range.startMinutes !== null && range.endMinutes !== null)
-    .map((range) => ({ ...range, endMinutes: range.endMinutes === 0 ? DAY_MINUTES : range.endMinutes }));
+  const day = resolveScheduleDay(storeConfig, weekdayKey);
 
-  const isWithinAnyInterval = intervals.some((range) => nowMinutes >= range.startMinutes && nowMinutes < range.endMinutes);
-  if (isWithinAnyInterval) {
+  if (!day.enabled) {
+    const nextOpen = getNextOpeningTime(storeConfig, now, timezone);
+    return {
+      isOpen: false,
+      message: nextOpen?.label ? `A loja está fechada no momento. Abrimos às ${nextOpen.label}.` : 'A loja está fechada no momento. Volte em nosso horário de atendimento.',
+      nextOpenAt: nextOpen || null,
+    };
+  }
+
+  const openMinutes = parseTimeToMinutes(day.open);
+  const closeMinutes = parseTimeToMinutes(day.close);
+
+  if (openMinutes === null || closeMinutes === null || closeMinutes <= openMinutes) {
+    return { isOpen: false, message: 'A loja está fechada no momento. Volte em nosso horário de atendimento.' };
+  }
+
+  const isOpen = nowMinutes >= openMinutes && nowMinutes < closeMinutes;
+  if (isOpen) {
     return { isOpen: true, message: 'Loja aberta' };
   }
 
-  const nextOpening = getNextOpeningTime(storeOperacao, now, timezone);
-  if (nextOpening?.label) {
-    return { isOpen: false, message: `Loja fechada • Abre às ${nextOpening.label}`, nextOpenAt: nextOpening };
-  }
-
-  return { isOpen: false, message: 'Loja fechada' };
+  const nextOpen = getNextOpeningTime(storeConfig, now, timezone);
+  return {
+    isOpen: false,
+    message: nextOpen?.label ? `A loja está fechada no momento. Abrimos às ${nextOpen.label}.` : 'A loja está fechada no momento. Volte em nosso horário de atendimento.',
+    nextOpenAt: nextOpen || null,
+  };
 };
+
+const DEFAULT_DAY = { enabled: true, open: '08:00', close: '18:00' };
 
 export const DEFAULT_OPERACAO = {
-  manualOpen: true,
+  timezone: DEFAULT_TIMEZONE,
   schedule: {
-    timezone: DEFAULT_TIMEZONE,
-    weekly: {
-      mon: [{ start: '08:00', end: '18:00' }],
-      tue: [{ start: '08:00', end: '18:00' }],
-      wed: [{ start: '08:00', end: '18:00' }],
-      thu: [{ start: '08:00', end: '18:00' }],
-      fri: [{ start: '08:00', end: '18:00' }],
-      sat: [{ start: '09:00', end: '14:00' }],
-      sun: [],
-    },
+    mon: { ...DEFAULT_DAY },
+    tue: { ...DEFAULT_DAY },
+    wed: { ...DEFAULT_DAY },
+    thu: { ...DEFAULT_DAY },
+    fri: { ...DEFAULT_DAY },
+    sat: { enabled: true, open: '09:00', close: '14:00' },
+    sun: { enabled: false, open: '08:00', close: '18:00' },
   },
-  override: {
-    enabled: false,
-    mode: 'CLOSED',
-    reason: '',
-    until: null,
+  manualOverride: {
+    mode: 'auto',
+    updatedAt: null,
+    updatedBy: null,
   },
 };
+
+export const WEEK_SCHEDULE_KEYS = WEEKDAY_KEYS;
