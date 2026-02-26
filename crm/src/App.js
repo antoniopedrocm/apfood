@@ -3434,7 +3434,9 @@ function App() {
 
                 if (user.role === ROLE_OWNER && user.canAccessAllStores) {
                     const snapshot = await getDocs(collection(db, 'lojas'));
-                    storeIds = snapshot.docs.map((docSnap) => docSnap.id);
+                    storeIds = snapshot.docs
+                        .filter((docSnap) => !(docSnap.data() || {}).isDeleted)
+                        .map((docSnap) => docSnap.id);
                 } else {
                     storeIds = user.lojaIds && user.lojaIds.length ? user.lojaIds : (user.lojaId ? [user.lojaId] : []);
                 }
@@ -5379,9 +5381,15 @@ function App() {
     );
   };
   
-	const Configuracoes = ({ user, setConfirmDelete, data, addItem, updateItem, deleteItem, availableStores, storeInfoMap, resolveActiveStoreForWrite, selectedStoreId, storeAlarmSnoozeMap, onSaveStoreAlarmSnoozeMinutes, canManageStoreAlarmConfig }) => {
+	const Configuracoes = ({ user, setConfirmDelete, data, addItem, updateItem, deleteItem, availableStores, storeInfoMap, resolveActiveStoreForWrite, selectedStoreId, storeAlarmSnoozeMap, onSaveStoreAlarmSnoozeMinutes, canManageStoreAlarmConfig, onCreateStore }) => {
     const [activeTab, setActiveTab] = usePersistentState('configuracoes_activeTab', 'users');
     const [alarmSnoozeInput, setAlarmSnoozeInput] = useState(String(DEFAULT_ALARM_SNOOZE_MINUTES));
+
+    useEffect(() => {
+        if (activeTab === 'lojas' && user?.role !== ROLE_OWNER) {
+            setActiveTab('users');
+        }
+    }, [activeTab, setActiveTab, user]);
     const [isSavingAlarmSnooze, setIsSavingAlarmSnooze] = useState(false);
     const [alarmSnoozeMessage, setAlarmSnoozeMessage] = useState(null);
 
@@ -5452,6 +5460,17 @@ const effectiveStoreName = useMemo(() => {
     const [showCupomModal, setShowCupomModal] = useState(false);
     const [editingCupom, setEditingCupom] = useState(null);
     const [cupomFormData, setCupomFormData] = useState({});
+
+    const [showStoreModal, setShowStoreModal] = useState(false);
+    const [editingStoreId, setEditingStoreId] = useState(null);
+    const [storeFormData, setStoreFormData] = useState({ nome: '', slug: '' });
+    const [storeFormError, setStoreFormError] = useState('');
+    const [isSavingStore, setIsSavingStore] = useState(false);
+
+    const [storePendingDelete, setStorePendingDelete] = useState(null);
+    const [deleteStoreInput, setDeleteStoreInput] = useState('');
+    const [deleteStoreError, setDeleteStoreError] = useState('');
+    const [isDeletingStore, setIsDeletingStore] = useState(false);
 	
 	    const userRoles = useMemo(() => {
         const roles = new Set((usuarios || []).map((userItem) => userItem.role).filter(Boolean));
@@ -5488,12 +5507,135 @@ const effectiveStoreName = useMemo(() => {
         );
     }, [userSearchTerm, userExcludeTerm, userEmailFilter, userRoleFilter]);
 
+    const sortedStores = useMemo(() => {
+        return [...availableStores]
+            .map((storeId) => ({ storeId, ...(storeInfoMap[storeId] || {}) }))
+            .sort((a, b) => (a.nome || a.storeId).localeCompare((b.nome || b.storeId), 'pt-BR'));
+    }, [availableStores, storeInfoMap]);
+
+    const isDefaultStore = useCallback((store) => {
+        return Boolean(store?.isDefault || store?.default || store?.isPrimary);
+    }, []);
+
+    const openCreateStoreModal = useCallback(() => {
+        setEditingStoreId(null);
+        setStoreFormData({ nome: '', slug: '' });
+        setStoreFormError('');
+        setShowStoreModal(true);
+    }, []);
+
+    const openEditStoreModal = useCallback((store) => {
+        setEditingStoreId(store.storeId);
+        setStoreFormData({
+            nome: store.nome || '',
+            slug: store.slug || ''
+        });
+        setStoreFormError('');
+        setShowStoreModal(true);
+    }, []);
+
+    const hasStoreDependencies = useCallback(async (storeId) => {
+        const [pedidosSnap, produtosSnap, usersPrimarySnap, usersSecondarySnap] = await Promise.all([
+            getDocs(query(collection(db, 'lojas', storeId, 'pedidos'), limit(1))),
+            getDocs(query(collection(db, 'lojas', storeId, 'produtos'), limit(1))),
+            getDocs(query(collection(db, 'users'), where('lojaId', '==', storeId), limit(1))),
+            getDocs(query(collection(db, 'users'), where('lojaIds', 'array-contains', storeId), limit(1)))
+        ]);
+
+        return (
+            !pedidosSnap.empty ||
+            !produtosSnap.empty ||
+            !usersPrimarySnap.empty ||
+            !usersSecondarySnap.empty
+        );
+    }, []);
+
     const handleClearUserFilters = useCallback(() => {
         setUserSearchTerm('');
         setUserExcludeTerm('');
         setUserEmailFilter('any');
         setUserRoleFilter('all');
     }, []);
+
+    const handleSaveStore = useCallback(async (event) => {
+        event.preventDefault();
+        if (user?.role !== ROLE_OWNER) return;
+
+        const nome = (storeFormData.nome || '').trim();
+        const slug = (storeFormData.slug || '').trim();
+
+        if (!nome) {
+            setStoreFormError('Informe o nome da loja.');
+            return;
+        }
+
+        setIsSavingStore(true);
+        setStoreFormError('');
+
+        try {
+            if (!editingStoreId) {
+                const generatedId = generateStoreId(slug || nome);
+                await onCreateStore({ storeId: generatedId, nome });
+            } else {
+                const payload = {
+                    nome,
+                    updatedAt: serverTimestamp(),
+                    updatedBy: user?.uid || user?.email || 'unknown'
+                };
+
+                if (slug) payload.slug = slug;
+
+                await setDoc(doc(db, 'lojas', editingStoreId), payload, { merge: true });
+            }
+
+            setShowStoreModal(false);
+        } catch (error) {
+            setStoreFormError(error?.message || 'Não foi possível salvar a loja.');
+        } finally {
+            setIsSavingStore(false);
+        }
+    }, [editingStoreId, onCreateStore, storeFormData, user]);
+
+    const handleDeleteStore = useCallback(async () => {
+        if (!storePendingDelete || user?.role !== ROLE_OWNER) return;
+
+        const storeName = (storePendingDelete.nome || storePendingDelete.storeId || '').trim();
+        if (deleteStoreInput.trim() !== storeName) {
+            setDeleteStoreError('Digite o nome da loja para confirmar a exclusão.');
+            return;
+        }
+
+        if (isDefaultStore(storePendingDelete)) {
+            setDeleteStoreError('A loja padrão do sistema não pode ser excluída.');
+            return;
+        }
+
+        setDeleteStoreError('');
+        setIsDeletingStore(true);
+
+        try {
+            const hasDependencies = await hasStoreDependencies(storePendingDelete.storeId);
+            if (hasDependencies) {
+                setDeleteStoreError('Não é possível excluir uma loja com dados vinculados. Inative a loja.');
+                return;
+            }
+
+            await setDoc(doc(db, 'lojas', storePendingDelete.storeId), {
+                isDeleted: true,
+                deletedAt: serverTimestamp(),
+                deletedBy: user?.uid || user?.email || 'unknown',
+                updatedAt: serverTimestamp(),
+                updatedBy: user?.uid || user?.email || 'unknown'
+            }, { merge: true });
+
+            setStorePendingDelete(null);
+            setDeleteStoreInput('');
+        } catch (error) {
+            setDeleteStoreError(error?.message || 'Não foi possível excluir a loja.');
+        } finally {
+            setIsDeletingStore(false);
+        }
+    }, [deleteStoreInput, hasStoreDependencies, isDefaultStore, storePendingDelete, user]);
 
     // 🔄 Carregar dados da aba ativa
     useEffect(() => {
@@ -6114,6 +6256,11 @@ const effectiveStoreName = useMemo(() => {
                     <button onClick={() => setActiveTab('logs')} className={`px-4 py-2 rounded-lg text-sm font-semibold transition-colors ${activeTab === 'logs' ? 'bg-pink-600 text-white' : 'hover:bg-pink-100'}`}>
                         Logs de Atividade
                     </button>
+                    {user?.role === ROLE_OWNER && (
+                        <button onClick={() => setActiveTab('lojas')} className={`px-4 py-2 rounded-lg text-sm font-semibold transition-colors ${activeTab === 'lojas' ? 'bg-pink-600 text-white' : 'hover:bg-pink-100'}`}>
+                            Gerenciar Lojas
+                        </button>
+                    )}
                 </div>
             </div>
             
@@ -6269,6 +6416,70 @@ const effectiveStoreName = useMemo(() => {
                 </div>
             )}
             
+            {activeTab === 'lojas' && user?.role === ROLE_OWNER && (
+                <div className="mt-4 space-y-4"> 
+                    <div className="flex justify-end"> 
+                        <Button onClick={openCreateStoreModal}> 
+                            <Plus className="w-4 h-4" /> Nova Loja
+                        </Button>
+                    </div>
+                    <div className="bg-white rounded-2xl shadow-lg border border-gray-100 overflow-hidden"> 
+                        <table className="min-w-full divide-y divide-gray-200"> 
+                            <thead className="bg-gray-50"> 
+                                <tr>
+                                    <th className="px-4 py-3 text-left text-xs font-semibold text-gray-600 uppercase">Nome</th>
+                                    <th className="px-4 py-3 text-left text-xs font-semibold text-gray-600 uppercase">ID</th>
+                                    <th className="px-4 py-3 text-left text-xs font-semibold text-gray-600 uppercase">Status</th>
+                                    <th className="px-4 py-3 text-left text-xs font-semibold text-gray-600 uppercase">Criada em</th>
+                                    <th className="px-4 py-3 text-left text-xs font-semibold text-gray-600 uppercase">Atualizada em</th>
+                                    <th className="px-4 py-3 text-right text-xs font-semibold text-gray-600 uppercase">Ações</th>
+                                </tr>
+                            </thead>
+                            <tbody className="divide-y divide-gray-100"> 
+                                {sortedStores.length === 0 ? (
+                                    <tr>
+                                        <td colSpan={6} className="px-4 py-6 text-center text-sm text-gray-500">Nenhuma loja cadastrada.</td>
+                                    </tr>
+                                ) : sortedStores.map((store) => {
+                                    const createdAt = getJSDate(store.createdAt);
+                                    const updatedAt = getJSDate(store.updatedAt);
+                                    const status = store.isDeleted ? 'Inativa' : (store.status || (store.ativo === false ? 'Inativa' : 'Ativa'));
+
+                                    return (
+                                        <tr key={store.storeId}>
+                                            <td className="px-4 py-3 text-sm text-gray-800 font-medium">{store.nome || store.storeId}</td>
+                                            <td className="px-4 py-3 text-xs text-gray-500 font-mono">{store.storeId}</td>
+                                            <td className="px-4 py-3 text-sm text-gray-600">{status}</td>
+                                            <td className="px-4 py-3 text-sm text-gray-600">{createdAt ? createdAt.toLocaleDateString('pt-BR') : '-'}</td>
+                                            <td className="px-4 py-3 text-sm text-gray-600">{updatedAt ? updatedAt.toLocaleDateString('pt-BR') : '-'}</td>
+                                            <td className="px-4 py-3"> 
+                                                <div className="flex justify-end gap-2"> 
+                                                    <Button size="sm" variant="secondary" onClick={() => openEditStoreModal(store)}>
+                                                        <Edit className="w-4 h-4" /> Editar
+                                                    </Button>
+                                                    <Button
+                                                        size="sm"
+                                                        variant="danger"
+                                                        disabled={isDefaultStore(store)}
+                                                        onClick={() => {
+                                                            setStorePendingDelete(store);
+                                                            setDeleteStoreInput('');
+                                                            setDeleteStoreError('');
+                                                        }}
+                                                    >
+                                                        <Trash2 className="w-4 h-4" /> Excluir
+                                                    </Button>
+                                                </div>
+                                            </td>
+                                        </tr>
+                                    );
+                                })}
+                            </tbody>
+                        </table>
+                    </div>
+                </div>
+            )}
+
             {activeTab === 'frete' && (
 
                 !effectiveStoreId ? (
@@ -6339,6 +6550,52 @@ const effectiveStoreName = useMemo(() => {
                 )
             )}
             
+                        <Modal isOpen={showStoreModal} onClose={() => setShowStoreModal(false)} title={editingStoreId ? 'Editar Loja' : 'Nova Loja'}>
+                <form onSubmit={handleSaveStore} className="space-y-4">
+                    <Input
+                        label="Nome da loja"
+                        value={storeFormData.nome}
+                        onChange={(e) => setStoreFormData((prev) => ({ ...prev, nome: e.target.value }))}
+                        required
+                    />
+                    <Input
+                        label="Slug/identificador (opcional)"
+                        value={storeFormData.slug}
+                        onChange={(e) => setStoreFormData((prev) => ({ ...prev, slug: e.target.value }))}
+                        placeholder="Ex: loja-centro"
+                    />
+                    {storeFormError && <p className="text-sm text-red-500">{storeFormError}</p>}
+                    <div className="flex justify-end gap-2 pt-2">
+                        <Button type="button" variant="secondary" onClick={() => setShowStoreModal(false)}>Cancelar</Button>
+                        <Button type="submit" disabled={isSavingStore}>
+                            <Save className="w-4 h-4" /> {isSavingStore ? 'Salvando...' : 'Salvar loja'}
+                        </Button>
+                    </div>
+                </form>
+            </Modal>
+
+            <Modal isOpen={Boolean(storePendingDelete)} onClose={() => setStorePendingDelete(null)} title="Confirmar exclusão de loja">
+                <div className="space-y-4">
+                    <p className="text-sm text-gray-700">Tem certeza que deseja excluir a loja <strong>{storePendingDelete?.nome || storePendingDelete?.storeId}</strong>?</p>
+                    <Input
+                        label="Digite o nome da loja para confirmar"
+                        value={deleteStoreInput}
+                        onChange={(e) => {
+                            setDeleteStoreInput(e.target.value);
+                            if (deleteStoreError) setDeleteStoreError('');
+                        }}
+                        placeholder={storePendingDelete?.nome || storePendingDelete?.storeId || ''}
+                    />
+                    {deleteStoreError && <p className="text-sm text-red-500">{deleteStoreError}</p>}
+                    <div className="flex justify-end gap-2 pt-2">
+                        <Button type="button" variant="secondary" onClick={() => setStorePendingDelete(null)}>Cancelar</Button>
+                        <Button type="button" variant="danger" onClick={handleDeleteStore} disabled={isDeletingStore}>
+                            <Trash2 className="w-4 h-4" /> {isDeletingStore ? 'Excluindo...' : 'Excluir loja'}
+                        </Button>
+                    </div>
+                </div>
+            </Modal>
+
             <Modal isOpen={showUserModal} onClose={() => setShowUserModal(false)} title={editingUser ? "Editar Usuário" : "Novo Usuário"}>
                  <form onSubmit={handleUserSubmit} className="space-y-4">
                     <div className="space-y-1">
@@ -7540,9 +7797,9 @@ const handleSubmit = async (e) => {
         />
       ) : <PaginaInicial />;
           case 'financeiro': return userHasPermission('financeiro') ? <Financeiro data={data} addItem={addItem} updateItem={updateItem} deleteItem={deleteItem} setConfirmDelete={setConfirmDelete} /> : <PaginaInicial />;
-      case 'configuracoes': return userHasPermission('configuracoes') ? <Configuracoes user={user} setConfirmDelete={setConfirmDelete} data={data} addItem={addItem} updateItem={updateItem} deleteItem={deleteItem} availableStores={availableStores} storeInfoMap={storeInfoMap} resolveActiveStoreForWrite={resolveActiveStoreForWrite} selectedStoreId={selectedStoreId} storeAlarmSnoozeMap={storeAlarmSnoozeMap} onSaveStoreAlarmSnoozeMinutes={handleSaveStoreAlarmSnoozeMinutes} canManageStoreAlarmConfig={canManageStoreAlarmConfig} /> : <PaginaInicial />;
+      case 'configuracoes': return userHasPermission('configuracoes') ? <Configuracoes user={user} setConfirmDelete={setConfirmDelete} data={data} addItem={addItem} updateItem={updateItem} deleteItem={deleteItem} availableStores={availableStores} storeInfoMap={storeInfoMap} resolveActiveStoreForWrite={resolveActiveStoreForWrite} selectedStoreId={selectedStoreId} storeAlarmSnoozeMap={storeAlarmSnoozeMap} onSaveStoreAlarmSnoozeMinutes={handleSaveStoreAlarmSnoozeMinutes} canManageStoreAlarmConfig={canManageStoreAlarmConfig} onCreateStore={handleCreateStore} /> : <PaginaInicial />;
       case 'financeiro': return user?.role === 'admin' ? <Financeiro data={data} addItem={addItem} updateItem={updateItem} deleteItem={deleteItem} setConfirmDelete={setConfirmDelete} /> : <PaginaInicial />;
-      case 'configuracoes': return user?.role === 'admin' ? <Configuracoes user={user} setConfirmDelete={setConfirmDelete} data={data} addItem={addItem} updateItem={updateItem} deleteItem={deleteItem} availableStores={availableStores} storeInfoMap={storeInfoMap} resolveActiveStoreForWrite={resolveActiveStoreForWrite} selectedStoreId={selectedStoreId} storeAlarmSnoozeMap={storeAlarmSnoozeMap} onSaveStoreAlarmSnoozeMinutes={handleSaveStoreAlarmSnoozeMinutes} canManageStoreAlarmConfig={canManageStoreAlarmConfig} /> : <PaginaInicial />;
+      case 'configuracoes': return user?.role === 'admin' ? <Configuracoes user={user} setConfirmDelete={setConfirmDelete} data={data} addItem={addItem} updateItem={updateItem} deleteItem={deleteItem} availableStores={availableStores} storeInfoMap={storeInfoMap} resolveActiveStoreForWrite={resolveActiveStoreForWrite} selectedStoreId={selectedStoreId} storeAlarmSnoozeMap={storeAlarmSnoozeMap} onSaveStoreAlarmSnoozeMinutes={handleSaveStoreAlarmSnoozeMinutes} canManageStoreAlarmConfig={canManageStoreAlarmConfig} onCreateStore={handleCreateStore} /> : <PaginaInicial />;
       default: return user ? <PlaceholderPage title={allMenuItems.find(i=>i.id===currentPage)?.label || "Página"} /> : <PaginaInicial />;
     }
   };
