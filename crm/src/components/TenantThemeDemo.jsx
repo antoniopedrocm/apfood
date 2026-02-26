@@ -67,7 +67,7 @@ export const TenantThemeDemo = ({ user }) => {
 
       {checkoutMessage ? <p className="text-sm text-slate-600">{checkoutMessage}</p> : null}
 
-      <StoreOperatingHoursPanel storeId={storeId} currentOperacao={operacao} user={user} />
+      <StoreOperatingHoursPanel storeId={storeId} currentStoreConfig={{ storeAvailability: operacao }} user={user} />
     </section>
   );
 };
