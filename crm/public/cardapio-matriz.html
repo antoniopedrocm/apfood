@@ -338,6 +338,13 @@
     </nav>
 
     <!-- CONTEÚDO PRINCIPAL -->
+    <div id="store-status-banner" class="container mx-auto px-6 pt-4 hidden">
+        <div class="rounded-lg border border-amber-200 bg-amber-50 p-3 text-amber-800" role="alert">
+            <p class="font-semibold">Loja fechada no momento</p>
+            <p id="store-status-message" class="text-sm">A loja está fechada no momento. Volte em nosso horário de atendimento.</p>
+        </div>
+    </div>
+
     <main class="container mx-auto px-6 py-8">
         <div id="product-list" class="space-y-12">
             <div id="loading-message" class="col-span-full flex flex-col items-center justify-center py-16">
@@ -1013,6 +1020,8 @@
         window.valorFrete = 0;
                 window.guestCurrentLatLng = null;
         let storeConfig = {};
+        let storeAvailabilityConfig = null;
+        let storeAvailabilityStatus = { isOpen: true, message: "Loja aberta" };
 
         // --- SELEÇÃO DE ELEMENTOS DOM ---
         const productList = document.getElementById('product-list'),
@@ -1070,7 +1079,101 @@
               toastMessage = document.getElementById('toast-message'),
               paymentCupomInput = document.getElementById('payment-cupom-input'),
               paymentVerifyCupomButton = document.getElementById('payment-verify-cupom-button'),
-              paymentCupomMessage = document.getElementById('payment-cupom-message');
+              paymentCupomMessage = document.getElementById('payment-cupom-message'),
+              storeStatusBanner = document.getElementById('store-status-banner'),
+              storeStatusMessage = document.getElementById('store-status-message');
+
+        
+        const WEEKDAY_KEYS = ["sun", "mon", "tue", "wed", "thu", "fri", "sat"];
+        const DEFAULT_STORE_TIMEZONE = "America/Sao_Paulo";
+
+        function parseTimeToMinutes(value) {
+            if (typeof value !== 'string') return null;
+            const [h, m] = value.split(':').map(Number);
+            if (!Number.isInteger(h) || !Number.isInteger(m) || h < 0 || h > 23 || m < 0 || m > 59) return null;
+            return h * 60 + m;
+        }
+
+        function getZonedParts(date, timezone = DEFAULT_STORE_TIMEZONE) {
+            const formatter = new Intl.DateTimeFormat('en-US', {
+                timeZone: timezone,
+                hour12: false,
+                weekday: 'short',
+                hour: '2-digit',
+                minute: '2-digit'
+            });
+            const parts = formatter.formatToParts(date).reduce((acc, part) => {
+                if (part.type !== 'literal') acc[part.type] = part.value;
+                return acc;
+            }, {});
+            const map = { Sun: 0, Mon: 1, Tue: 2, Wed: 3, Thu: 4, Fri: 5, Sat: 6 };
+            return { weekdayIndex: map[parts.weekday] ?? 0, hour: Number(parts.hour), minute: Number(parts.minute) };
+        }
+
+        function resolveScheduleDay(config, dayKey) {
+            const day = config?.schedule?.[dayKey];
+            if (day && typeof day === 'object' && !Array.isArray(day)) return day;
+            const legacyRange = Array.isArray(config?.schedule?.weekly?.[dayKey]) ? config.schedule.weekly[dayKey][0] : null;
+            if (legacyRange) return { enabled: true, open: legacyRange.start, close: legacyRange.end };
+            return { enabled: false, open: '08:00', close: '18:00' };
+        }
+
+        function getNextOpeningTime(config, now, timezone) {
+            const zoned = getZonedParts(now, timezone);
+            const nowMinutes = zoned.hour * 60 + zoned.minute;
+            for (let offset = 0; offset < 7; offset += 1) {
+                const key = WEEKDAY_KEYS[(zoned.weekdayIndex + offset) % 7];
+                const day = resolveScheduleDay(config, key);
+                if (!day?.enabled) continue;
+                const start = parseTimeToMinutes(day.open);
+                if (start !== null && (offset > 0 || start > nowMinutes)) return day.open;
+            }
+            return null;
+        }
+
+        function isStoreOpenNow(config, now = new Date()) {
+            const normalized = config?.storeAvailability || config?.operacao || config || {};
+            const mode = normalized?.manualOverride?.mode || 'auto';
+            if (mode === 'force_open') return { isOpen: true, message: 'Loja aberta por ação do gestor' };
+            if (mode === 'force_closed') return { isOpen: false, message: 'A loja está fechada no momento. Volte em nosso horário de atendimento.' };
+
+            const timezone = normalized?.timezone || normalized?.schedule?.timezone || DEFAULT_STORE_TIMEZONE;
+            const zoned = getZonedParts(now, timezone);
+            const day = resolveScheduleDay(normalized, WEEKDAY_KEYS[zoned.weekdayIndex]);
+            const minutes = zoned.hour * 60 + zoned.minute;
+            const open = parseTimeToMinutes(day.open);
+            const close = parseTimeToMinutes(day.close);
+            const validRange = day.enabled && open !== null && close !== null && close > open;
+            if (validRange && minutes >= open && minutes < close) return { isOpen: true, message: 'Loja aberta' };
+            const nextOpen = getNextOpeningTime(normalized, now, timezone);
+            return { isOpen: false, message: nextOpen ? `A loja está fechada no momento. Abrimos às ${nextOpen}.` : 'A loja está fechada no momento. Volte em nosso horário de atendimento.' };
+        }
+
+        function updateStoreAvailabilityUI() {
+            if (!storeAvailabilityStatus?.isOpen) {
+                checkoutButton.disabled = true;
+                checkoutButton.classList.add('opacity-60', 'cursor-not-allowed');
+                storeStatusMessage.textContent = storeAvailabilityStatus.message || 'A loja está fechada no momento. Volte em nosso horário de atendimento.';
+                storeStatusBanner.classList.remove('hidden');
+                return;
+            }
+            checkoutButton.disabled = false;
+            checkoutButton.classList.remove('opacity-60', 'cursor-not-allowed');
+            storeStatusBanner.classList.add('hidden');
+        }
+
+        async function subscribeStoreAvailability() {
+            const { db, doc, onSnapshot } = await import('./firebaseClientConfig.js');
+            onSnapshot(doc(db, ...storePath()), (snapshot) => {
+                const data = snapshot.exists() ? snapshot.data() : {};
+                storeAvailabilityConfig = data || {};
+                storeAvailabilityStatus = isStoreOpenNow(storeAvailabilityConfig, new Date());
+                updateStoreAvailabilityUI();
+            }, () => {
+                storeAvailabilityStatus = { isOpen: true, message: 'Loja aberta' };
+                updateStoreAvailabilityUI();
+            });
+        }
 
         // --- INICIALIZAÇÃO DA APLICAÇÃO ---
         window.appInitialized = false;
@@ -1082,6 +1185,7 @@
                 console.log(`🚀 Inicializando aplicação (${reason})...`);
                 await fetchStoreConfig();
                 await fetchProducts();
+                await subscribeStoreAvailability();
                 setupEventListeners();
                 renderCart();
                 console.log("✅ Aplicação inicializada com sucesso!");
@@ -1463,6 +1567,10 @@
             closeCartButton.addEventListener('click', () => cartModal.classList.add('hidden'));
             
             checkoutButton.addEventListener('click', () => { 
+                if (!storeAvailabilityStatus?.isOpen) {
+                    showToast('A loja está fechada no momento. Volte em nosso horário de atendimento.', true);
+                    return;
+                }
                 if (cart.length === 0) { 
                     showToast('Seu carrinho está vazio!', true); 
                     return; 
@@ -2177,7 +2285,11 @@
                 await finalizeOrder(finalOrderDetails, finalOrderDetails.clienteId, true);
             } catch (error) {
                 console.error('Erro ao confirmar pedido:', error);
-                showToast('Erro ao confirmar o pedido.', true);
+                if (String(error?.message || '').includes('STORE_CLOSED')) {
+                    showToast('A loja está fechada no momento. Volte em nosso horário de atendimento.', true);
+                } else {
+                    showToast('Erro ao confirmar o pedido.', true);
+                }
             } finally {
                 confirmOrderButton.disabled = false;
                 confirmOrderButton.textContent = 'Confirmar Pedido';
@@ -2185,6 +2297,9 @@
         }
 
         async function finalizeOrder(clientInfo, clientId, isPlatform) {
+            if (!storeAvailabilityStatus?.isOpen) {
+                throw new Error('STORE_CLOSED');
+            }
             const subtotal = cart.reduce((sum, item) => sum + (item.preco * item.quantity), 0);
             let cupomData = null;
             if(appliedCupom) {
@@ -2272,7 +2387,11 @@
                 
             } catch (error) {
                 console.error("Erro ao salvar pedido:", error);
-                showToast('Erro ao confirmar o pedido.', true);
+                if (String(error?.message || '').includes('STORE_CLOSED')) {
+                    showToast('A loja está fechada no momento. Volte em nosso horário de atendimento.', true);
+                } else {
+                    showToast('Erro ao confirmar o pedido.', true);
+                }
             }
         }
         document.addEventListener('DOMContentLoaded', initApp);

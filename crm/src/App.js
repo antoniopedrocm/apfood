@@ -26,6 +26,7 @@ import { ref, uploadBytes, getDownloadURL } from "firebase/storage";
 import { audioManager } from './utils/AudioManager.js';
 import { registerDeviceForPush, listenForForegroundMessages, subscribeToServiceWorkerMessages } from './utils/notifications.js';
 import { updateStock as updateStockService } from './services/stockService.js';
+import { StoreOperatingHoursPanel } from './components/StoreOperatingHoursPanel.jsx';
 import {
   isPopupFallbackError,
   logAuthRuntimeDiagnostics,
@@ -5471,6 +5472,8 @@ const effectiveStoreName = useMemo(() => {
     const [deleteStoreInput, setDeleteStoreInput] = useState('');
     const [deleteStoreError, setDeleteStoreError] = useState('');
     const [isDeletingStore, setIsDeletingStore] = useState(false);
+    const [storeAvailabilityConfig, setStoreAvailabilityConfig] = useState(null);
+    const [storeAvailabilityLoading, setStoreAvailabilityLoading] = useState(false);
 	
 	    const userRoles = useMemo(() => {
         const roles = new Set((usuarios || []).map((userItem) => userItem.role).filter(Boolean));
@@ -6187,6 +6190,25 @@ const effectiveStoreName = useMemo(() => {
 
     }, [data, storeInfoMap, effectiveStoreName]);
 
+
+    useEffect(() => {
+        if (activeTab !== 'funcionamento') return undefined;
+        if (!effectiveStoreId || effectiveStoreId === STORE_ALL_KEY) {
+            setStoreAvailabilityConfig(null);
+            return undefined;
+        }
+
+        setStoreAvailabilityLoading(true);
+        const unsubscribe = onSnapshot(doc(db, 'lojas', effectiveStoreId), (snapshot) => {
+            setStoreAvailabilityConfig(snapshot.exists() ? (snapshot.data() || {}) : null);
+            setStoreAvailabilityLoading(false);
+        }, () => {
+            setStoreAvailabilityLoading(false);
+        });
+
+        return () => unsubscribe();
+    }, [activeTab, effectiveStoreId]);
+
     const userColumns = [
         { header: "Nome", key: "nome" },
         { header: "Email", key: "email" },
@@ -6249,6 +6271,9 @@ const effectiveStoreName = useMemo(() => {
                     </button>
                     <button onClick={() => setActiveTab('frete')} className={`px-4 py-2 rounded-lg text-sm font-semibold transition-colors ${activeTab === 'frete' ? 'bg-pink-600 text-white' : 'hover:bg-pink-100'}`}>
                         Frete
+                    </button>
+                    <button onClick={() => setActiveTab('funcionamento')} className={`px-4 py-2 rounded-lg text-sm font-semibold transition-colors ${activeTab === 'funcionamento' ? 'bg-pink-600 text-white' : 'hover:bg-pink-100'}`}>
+                        Funcionamento
                     </button>
                     <button onClick={() => setActiveTab('alarme')} className={`px-4 py-2 rounded-lg text-sm font-semibold transition-colors ${activeTab === 'alarme' ? 'bg-pink-600 text-white' : 'hover:bg-pink-100'}`}>
                         Alarme
@@ -6401,6 +6426,23 @@ const effectiveStoreName = useMemo(() => {
                         </form>
                     </div>
                 )
+            )}
+
+
+            {activeTab === 'funcionamento' && (
+                <div className="bg-white rounded-2xl shadow-lg border border-gray-100 p-4 md:p-6"> 
+                    {!effectiveStoreId || effectiveStoreId === STORE_ALL_KEY ? (
+                        <p className="text-sm text-gray-600">Selecione uma loja específica para configurar o horário de funcionamento.</p>
+                    ) : storeAvailabilityLoading ? (
+                        <p className="text-sm text-gray-600">Carregando configuração de funcionamento...</p>
+                    ) : (
+                        <StoreOperatingHoursPanel
+                            storeId={effectiveStoreId}
+                            currentStoreConfig={storeAvailabilityConfig}
+                            user={{ role: user?.role, uid: user?.auth?.uid }}
+                        />
+                    )}
+                </div>
             )}
 
             {activeTab === 'logs' && (

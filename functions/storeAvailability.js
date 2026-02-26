@@ -4,17 +4,8 @@ const DEFAULT_TIMEZONE = "America/Sao_Paulo";
 const parseTimeToMinutes = (value) => {
   if (typeof value !== "string") return null;
   const [h, m] = value.split(":").map(Number);
-  if (!Number.isInteger(h) || !Number.isInteger(m)) return null;
+  if (!Number.isInteger(h) || !Number.isInteger(m) || h < 0 || h > 23 || m < 0 || m > 59) return null;
   return h * 60 + m;
-};
-
-const toMillis = (value) => {
-  if (!value) return null;
-  if (typeof value.toMillis === "function") return value.toMillis();
-  if (value instanceof Date) return value.getTime();
-  if (typeof value === "number") return value;
-  const parsed = Date.parse(value);
-  return Number.isNaN(parsed) ? null : parsed;
 };
 
 const getZonedParts = (date, timezone = DEFAULT_TIMEZONE) => {
@@ -39,61 +30,90 @@ const getZonedParts = (date, timezone = DEFAULT_TIMEZONE) => {
   };
 };
 
-const getNextOpeningTime = (operacao, now = new Date(), timezone = DEFAULT_TIMEZONE) => {
+const resolveScheduleDay = (storeConfig, dayKey) => {
+  const day = storeConfig?.schedule?.[dayKey];
+  if (day && typeof day === "object" && !Array.isArray(day)) {
+    return {
+      enabled: Boolean(day.enabled),
+      open: day.open || "08:00",
+      close: day.close || "18:00",
+    };
+  }
+
+  const legacyRanges = Array.isArray(storeConfig?.schedule?.weekly?.[dayKey]) ? storeConfig.schedule.weekly[dayKey] : [];
+  const firstRange = legacyRanges[0];
+  if (firstRange) {
+    return {
+      enabled: true,
+      open: firstRange.start || "08:00",
+      close: firstRange.end || "18:00",
+    };
+  }
+
+  return {enabled: false, open: "08:00", close: "18:00"};
+};
+
+const getNextOpeningTime = (storeConfig, now = new Date(), timezone = DEFAULT_TIMEZONE) => {
   const zoned = getZonedParts(now, timezone);
   const nowMinutes = zoned.hour * 60 + zoned.minute;
 
   for (let offset = 0; offset < 7; offset += 1) {
     const day = WEEKDAY_KEYS[(zoned.weekdayIndex + offset) % 7];
-    const intervals = Array.isArray(operacao?.schedule?.weekly?.[day]) ? operacao.schedule.weekly[day] : [];
-    const sorted = intervals
-      .map((it) => ({start: it.start, startMinutes: parseTimeToMinutes(it.start)}))
-      .filter((it) => it.startMinutes !== null)
-      .sort((a, b) => a.startMinutes - b.startMinutes);
-
-    const candidate = sorted.find((it) => offset > 0 || it.startMinutes > nowMinutes);
-    if (candidate) {
-      const hh = String(Math.floor(candidate.startMinutes / 60)).padStart(2, "0");
-      const mm = String(candidate.startMinutes % 60).padStart(2, "0");
-      return {dayOffset: offset, start: candidate.start, label: `${hh}:${mm}`};
+    const dayConfig = resolveScheduleDay(storeConfig, day);
+    if (!dayConfig.enabled) continue;
+    const start = parseTimeToMinutes(dayConfig.open);
+    if (start === null) continue;
+    if (offset > 0 || start > nowMinutes) {
+      return {dayOffset: offset, start: dayConfig.open, label: dayConfig.open};
     }
   }
+
   return null;
 };
 
-const isStoreOpenNow = (operacao, now = new Date(), timezoneInput) => {
-  const timezone = timezoneInput || operacao?.schedule?.timezone || DEFAULT_TIMEZONE;
-  const override = operacao?.override || {};
-  const until = toMillis(override.until);
-  const overrideOn = Boolean(override.enabled) && (!until || until > now.getTime());
+const isStoreOpenNow = (rawStoreConfig, now = new Date()) => {
+  const storeConfig = rawStoreConfig?.storeAvailability || rawStoreConfig || {};
+  const timezone = storeConfig?.timezone || storeConfig?.schedule?.timezone || DEFAULT_TIMEZONE;
+  const mode = storeConfig?.manualOverride?.mode || "auto";
 
-  if (overrideOn && override.mode === "CLOSED") {
-    return {isOpen: false, message: override.reason || "Loja fechada no momento"};
-  }
-  if (overrideOn && override.mode === "OPEN") {
-    return {isOpen: true, message: "Loja aberta por exceção"};
+  if (mode === "force_open") {
+    return {isOpen: true, message: "Loja aberta por ação do gestor"};
   }
 
-  if (operacao?.manualOpen === false) {
-    return {isOpen: false, message: "Loja fechada (pausada pelo gestor)"};
+  if (mode === "force_closed") {
+    return {isOpen: false, message: "A loja está fechada no momento. Volte em nosso horário de atendimento."};
   }
 
   const zoned = getZonedParts(now, timezone);
-  const day = WEEKDAY_KEYS[zoned.weekdayIndex];
+  const dayKey = WEEKDAY_KEYS[zoned.weekdayIndex];
   const nowMinutes = zoned.hour * 60 + zoned.minute;
-  const intervals = Array.isArray(operacao?.schedule?.weekly?.[day]) ? operacao.schedule.weekly[day] : [];
+  const day = resolveScheduleDay(storeConfig, dayKey);
 
-  const isOpen = intervals.some((it) => {
-    const start = parseTimeToMinutes(it.start);
-    const end = parseTimeToMinutes(it.end);
-    return start !== null && end !== null && nowMinutes >= start && nowMinutes < end;
-  });
+  if (!day.enabled) {
+    const next = getNextOpeningTime(storeConfig, now, timezone);
+    return {
+      isOpen: false,
+      message: next?.label ? `A loja está fechada no momento. Abrimos às ${next.label}.` : "A loja está fechada no momento. Volte em nosso horário de atendimento.",
+      nextOpenAt: next || null,
+    };
+  }
 
+  const openMinutes = parseTimeToMinutes(day.open);
+  const closeMinutes = parseTimeToMinutes(day.close);
+
+  if (openMinutes === null || closeMinutes === null || closeMinutes <= openMinutes) {
+    return {isOpen: false, message: "A loja está fechada no momento. Volte em nosso horário de atendimento."};
+  }
+
+  const isOpen = nowMinutes >= openMinutes && nowMinutes < closeMinutes;
   if (isOpen) return {isOpen: true, message: "Loja aberta"};
 
-  const next = getNextOpeningTime(operacao, now, timezone);
-  if (next) return {isOpen: false, message: `Loja fechada • Abre às ${next.label}`, nextOpenAt: next};
-  return {isOpen: false, message: "Loja fechada"};
+  const next = getNextOpeningTime(storeConfig, now, timezone);
+  return {
+    isOpen: false,
+    message: next?.label ? `A loja está fechada no momento. Abrimos às ${next.label}.` : "A loja está fechada no momento. Volte em nosso horário de atendimento.",
+    nextOpenAt: next || null,
+  };
 };
 
 module.exports = {isStoreOpenNow, getNextOpeningTime};

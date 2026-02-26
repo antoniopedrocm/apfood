@@ -49,7 +49,7 @@ export const BrandingProvider = ({ storeId, children }) => {
     }
 
     const unsub = onSnapshot(
-      doc(db, 'stores', storeId),
+      doc(db, 'lojas', storeId),
       (snapshot) => {
         if (!snapshot.exists()) {
           setState({ branding: DEFAULT_BRANDING, operacao: DEFAULT_OPERACAO, availabilityStatus: { isOpen: false, message: 'Loja não encontrada' }, loading: false, notFound: true, error: null });
@@ -69,22 +69,18 @@ export const BrandingProvider = ({ storeId, children }) => {
 
         const operacao = {
           ...DEFAULT_OPERACAO,
-          ...(data?.operacao || {}),
+          ...(data?.storeAvailability || data?.operacao || {}),
           schedule: {
             ...DEFAULT_OPERACAO.schedule,
-            ...(data?.operacao?.schedule || {}),
-            weekly: {
-              ...DEFAULT_OPERACAO.schedule.weekly,
-              ...(data?.operacao?.schedule?.weekly || {}),
-            },
+            ...((data?.storeAvailability || data?.operacao || {}).schedule || {}),
           },
-          override: {
-            ...DEFAULT_OPERACAO.override,
-            ...(data?.operacao?.override || {}),
+          manualOverride: {
+            ...DEFAULT_OPERACAO.manualOverride,
+            ...((data?.storeAvailability || data?.operacao || {}).manualOverride || {}),
           },
         };
 
-        const availabilityStatus = isStoreOpenNow(operacao, new Date(), operacao.schedule?.timezone);
+        const availabilityStatus = isStoreOpenNow({ storeAvailability: operacao }, new Date());
         setState({ branding, operacao, availabilityStatus, loading: false, notFound: false, error: null });
         applyBrandingCssVariables(branding);
       },
