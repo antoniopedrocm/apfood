@@ -20,7 +20,7 @@ import { httpsCallable } from "firebase/functions";
 import { onAuthStateChanged, signInWithEmailAndPassword, signOut, GoogleAuthProvider, signInWithRedirect, signInWithPopup, getRedirectResult, sendPasswordResetEmail, setPersistence, browserLocalPersistence } from "firebase/auth";
 // CORRIGIDO: Adicionado 'getDocs' à importação
 import { collection, onSnapshot, query, doc, getDoc, setDoc, addDoc, updateDoc, deleteDoc, where, getDocs, limit, orderBy, Timestamp, serverTimestamp, arrayUnion, writeBatch } from "firebase/firestore";
-import { ref, uploadBytes, getDownloadURL } from "firebase/storage";
+import { ref, uploadBytes, getDownloadURL, deleteObject } from "firebase/storage";
 
 // --- CORREÇÃO: Importa o novo AudioManager ---
 import { audioManager } from './utils/AudioManager.js';
@@ -51,6 +51,8 @@ const STORE_ALL_KEY = '__all__';
 const DEFAULT_ALARM_SNOOZE_MINUTES = 5;
 const MIN_ALARM_SNOOZE_MINUTES = 1;
 const MAX_ALARM_SNOOZE_MINUTES = 120;
+const MAX_LOGO_FILE_SIZE_BYTES = 1 * 1024 * 1024;
+const ACCEPTED_LOGO_MIME_TYPES = ['image/png', 'image/jpeg', 'image/jpg', 'image/svg+xml'];
 const DEFAULT_FORNECEDOR_CATEGORIES = ['Insumos', 'Embalagens', 'Bebidas', 'Decoração', 'Serviços'];
 const CONFIG_DOC_ID = 'config';
 const GOOGLE_AUTH_FLOW_KEY = 'google-auth-flow-in-progress';
@@ -5290,9 +5292,12 @@ function App() {
     );
   };
   
-	const Configuracoes = ({ user, setConfirmDelete, data, addItem, updateItem, deleteItem, availableStores, storeInfoMap, resolveActiveStoreForWrite, selectedStoreId, storeAlarmSnoozeMap, onSaveStoreAlarmSnoozeMinutes, canManageStoreAlarmConfig, onCreateStore }) => {
+	const Configuracoes = ({ user, setConfirmDelete, data, addItem, updateItem, deleteItem, availableStores, storeInfoMap, resolveActiveStoreForWrite, selectedStoreId, storeAlarmSnoozeMap, onSaveStoreAlarmSnoozeMinutes, canManageStoreAlarmConfig, onCreateStore, onStoreBrandingChange }) => {
     const [activeTab, setActiveTab] = usePersistentState('configuracoes_activeTab', 'users');
     const [alarmSnoozeInput, setAlarmSnoozeInput] = useState(String(DEFAULT_ALARM_SNOOZE_MINUTES));
+    const [isSavingLogo, setIsSavingLogo] = useState(false);
+    const [logoMessage, setLogoMessage] = useState(null);
+    const logoFileInputRef = useRef(null);
 
     useEffect(() => {
         if (activeTab === 'lojas' && user?.role !== ROLE_OWNER) {
@@ -5352,6 +5357,16 @@ const effectiveStoreName = useMemo(() => {
         return canManageStoreAlarmConfig(effectiveStoreId);
     }, [canManageStoreAlarmConfig, effectiveStoreId]);
 
+    const canEditStoreLogo = useMemo(() => {
+        if (!effectiveStoreId) return false;
+        return canManageStoreAlarmConfig(effectiveStoreId);
+    }, [canManageStoreAlarmConfig, effectiveStoreId]);
+
+    const currentStoreLogo = useMemo(() => {
+        if (!effectiveStoreId) return null;
+        return storeInfoMap?.[effectiveStoreId]?.branding?.logoUrl || null;
+    }, [effectiveStoreId, storeInfoMap]);
+
     useEffect(() => {
         if (!effectiveStoreId) {
             setAlarmSnoozeInput(String(DEFAULT_ALARM_SNOOZE_MINUTES));
@@ -5363,6 +5378,154 @@ const effectiveStoreName = useMemo(() => {
         setAlarmSnoozeInput(String(resolved));
         setAlarmSnoozeMessage(null);
     }, [effectiveStoreId, storeAlarmSnoozeMap]);
+
+    useEffect(() => {
+        setLogoMessage(null);
+    }, [effectiveStoreId]);
+
+    const validateLogoDimensions = useCallback((file) => {
+        if (!file || file.type === 'image/svg+xml') {
+            return Promise.resolve();
+        }
+
+        return new Promise((resolve, reject) => {
+            const imageUrl = URL.createObjectURL(file);
+            const image = new Image();
+
+            image.onload = () => {
+                const { width, height } = image;
+                URL.revokeObjectURL(imageUrl);
+
+                if (width < 200 || height < 60 || width > 2400 || height > 800) {
+                    reject(new Error('Imagem fora do tamanho recomendado. Use algo próximo de 600x200 px (mínimo 200x60 e máximo 2400x800).'));
+                    return;
+                }
+
+                resolve();
+            };
+
+            image.onerror = () => {
+                URL.revokeObjectURL(imageUrl);
+                reject(new Error('Não foi possível validar as dimensões da imagem selecionada.'));
+            };
+
+            image.src = imageUrl;
+        });
+    }, []);
+
+    const handleUploadStoreLogo = useCallback(async (event) => {
+        const file = event.target.files?.[0];
+        if (!file) return;
+
+        if (!effectiveStoreId) {
+            setLogoMessage({ type: 'error', text: 'Selecione uma loja para editar a logo.' });
+            event.target.value = '';
+            return;
+        }
+
+        if (!canEditStoreLogo) {
+            setLogoMessage({ type: 'error', text: 'Você não tem permissão para alterar a logo desta loja.' });
+            event.target.value = '';
+            return;
+        }
+
+        if (!ACCEPTED_LOGO_MIME_TYPES.includes(file.type)) {
+            setLogoMessage({ type: 'error', text: 'Formato inválido. Envie PNG, JPG ou SVG.' });
+            event.target.value = '';
+            return;
+        }
+
+        if (file.size > MAX_LOGO_FILE_SIZE_BYTES) {
+            setLogoMessage({ type: 'error', text: 'A logo deve ter no máximo 1MB.' });
+            event.target.value = '';
+            return;
+        }
+
+        setIsSavingLogo(true);
+        setLogoMessage(null);
+
+        try {
+            await validateLogoDimensions(file);
+
+            const ext = (file.name.split('.').pop() || 'png').toLowerCase();
+            const logoPath = `lojas/${effectiveStoreId}/branding/logo.${ext}`;
+            const logoRef = ref(storage, logoPath);
+
+            await uploadBytes(logoRef, file, { contentType: file.type });
+            const logoUrl = await getDownloadURL(logoRef);
+
+            await setDoc(doc(db, 'lojas', effectiveStoreId), {
+                branding: {
+                    logoUrl,
+                    logoPath,
+                    updatedAt: serverTimestamp(),
+                    updatedBy: user?.auth?.uid || user?.auth?.email || 'unknown'
+                }
+            }, { merge: true });
+
+            onStoreBrandingChange(effectiveStoreId, { logoUrl, logoPath });
+
+            if (localStorage.getItem('authDebug') === '1') {
+                console.debug('[branding] Logo atualizada', { effectiveStoreId, logoPath });
+            }
+
+            setLogoMessage({ type: 'success', text: 'Logo atualizada com sucesso.' });
+        } catch (error) {
+            setLogoMessage({ type: 'error', text: error?.message || 'Não foi possível enviar a logo.' });
+        } finally {
+            setIsSavingLogo(false);
+            event.target.value = '';
+        }
+    }, [canEditStoreLogo, effectiveStoreId, onStoreBrandingChange, user, validateLogoDimensions]);
+
+    const handleRemoveStoreLogo = useCallback(async () => {
+        if (!effectiveStoreId) {
+            setLogoMessage({ type: 'error', text: 'Selecione uma loja para editar a logo.' });
+            return;
+        }
+
+        if (!canEditStoreLogo) {
+            setLogoMessage({ type: 'error', text: 'Você não tem permissão para alterar a logo desta loja.' });
+            return;
+        }
+
+        setIsSavingLogo(true);
+        setLogoMessage(null);
+
+        try {
+            const currentLogoPath = storeInfoMap?.[effectiveStoreId]?.branding?.logoPath;
+            if (currentLogoPath) {
+                try {
+                    await deleteObject(ref(storage, currentLogoPath));
+                } catch (storageError) {
+                    if (storageError?.code !== 'storage/object-not-found') {
+                        throw storageError;
+                    }
+                }
+            }
+
+            await setDoc(doc(db, 'lojas', effectiveStoreId), {
+                branding: {
+                    logoUrl: null,
+                    logoPath: null,
+                    updatedAt: serverTimestamp(),
+                    updatedBy: user?.auth?.uid || user?.auth?.email || 'unknown'
+                }
+            }, { merge: true });
+
+            onStoreBrandingChange(effectiveStoreId, { logoUrl: null, logoPath: null });
+
+            if (localStorage.getItem('authDebug') === '1') {
+                console.debug('[branding] Logo removida', { effectiveStoreId, currentLogoPath: currentLogoPath || null });
+            }
+
+            setLogoMessage({ type: 'success', text: 'Logo removida. A logo padrão será exibida.' });
+        } catch (error) {
+            setLogoMessage({ type: 'error', text: error?.message || 'Não foi possível remover a logo.' });
+        } finally {
+            setIsSavingLogo(false);
+        }
+    }, [canEditStoreLogo, effectiveStoreId, onStoreBrandingChange, storeInfoMap, user]);
 
     // States para Cupons
     const [cupons, setCupons] = useState([]);
@@ -6186,6 +6349,9 @@ const effectiveStoreName = useMemo(() => {
                     <button onClick={() => setActiveTab('alarme')} className={`px-4 py-2 rounded-lg text-sm font-semibold transition-colors ${activeTab === 'alarme' ? 'bg-pink-600 text-white' : 'hover:bg-pink-100'}`}>
                         Alarme
                     </button>
+                    <button onClick={() => setActiveTab('logo')} className={`px-4 py-2 rounded-lg text-sm font-semibold transition-colors ${activeTab === 'logo' ? 'bg-pink-600 text-white' : 'hover:bg-pink-100'}`}>
+                        Identidade / Logo
+                    </button>
                     <button onClick={() => setActiveTab('logs')} className={`px-4 py-2 rounded-lg text-sm font-semibold transition-colors ${activeTab === 'logs' ? 'bg-pink-600 text-white' : 'hover:bg-pink-100'}`}>
                         Logs de Atividade
                     </button>
@@ -6351,6 +6517,55 @@ const effectiveStoreName = useMemo(() => {
                         />
                     )}
                 </div>
+            )}
+
+            {activeTab === 'logo' && (
+                !effectiveStoreId ? (
+                    <div className="mt-6 bg-white rounded-2xl shadow-lg border border-gray-100 p-6 text-center text-gray-500">
+                        Selecione uma loja para editar a logo.
+                    </div>
+                ) : (
+                    <div className="mt-6 bg-white rounded-2xl shadow-lg border border-gray-100 p-6 max-w-2xl space-y-4">
+                        <div>
+                            <h3 className="text-xl font-bold text-gray-800">Identidade da loja</h3>
+                            <p className="text-sm text-gray-500">Loja atual: <strong>{effectiveStoreName}</strong></p>
+                        </div>
+                        <div className="border border-dashed border-gray-300 rounded-xl p-4 bg-gray-50 flex items-center justify-center min-h-32">
+                            {currentStoreLogo ? (
+                                <img src={currentStoreLogo} alt="Logo da loja" className="max-h-24 max-w-full object-contain" />
+                            ) : (
+                                <img src="logotipo.png" alt="Logo padrão" className="max-h-24 max-w-full object-contain opacity-80" />
+                            )}
+                        </div>
+                        <p className="text-xs text-gray-500">Formatos aceitos: PNG, JPG ou SVG. Tamanho máximo: 1MB. Recomendado: 600x200 px.</p>
+
+                        {logoMessage && (
+                            <p className={`text-sm ${logoMessage.type === 'success' ? 'text-green-600' : 'text-red-600'}`}>
+                                {logoMessage.text}
+                            </p>
+                        )}
+
+                        {!canEditStoreLogo ? (
+                            <p className="text-sm text-amber-600">Você não tem permissão para alterar a logo.</p>
+                        ) : (
+                            <div className="flex flex-wrap gap-3">
+                                <input
+                                    ref={logoFileInputRef}
+                                    type="file"
+                                    accept="image/png,image/jpeg,image/jpg,image/svg+xml"
+                                    className="hidden"
+                                    onChange={handleUploadStoreLogo}
+                                />
+                                <Button type="button" onClick={() => logoFileInputRef.current?.click()} disabled={isSavingLogo}>
+                                    <ImageIcon className="w-4 h-4" /> {isSavingLogo ? 'Enviando...' : 'Enviar/Alterar logo'}
+                                </Button>
+                                <Button type="button" variant="secondary" onClick={handleRemoveStoreLogo} disabled={isSavingLogo}>
+                                    <Trash2 className="w-4 h-4" /> Remover logo
+                                </Button>
+                            </div>
+                        )}
+                    </div>
+                )
             )}
 
             {activeTab === 'logs' && (
@@ -7718,6 +7933,24 @@ const handleSubmit = async (e) => {
     return normalizedMinutes;
   }, [canManageStoreAlarmConfig]);
 
+  const handleStoreBrandingChange = useCallback((storeId, brandingPatch) => {
+    if (!storeId) return;
+
+    setStoreInfoMap((prev) => {
+      const previousStore = prev[storeId] || {};
+      return {
+        ...prev,
+        [storeId]: {
+          ...previousStore,
+          branding: {
+            ...(previousStore.branding || {}),
+            ...(brandingPatch || {})
+          }
+        }
+      };
+    });
+  }, []);
+
   const renderCurrentPage = () => {
     if (authLoading || (loading && user)) {
       return (<div className="flex h-full w-full items-center justify-center"><div className="animate-spin rounded-full h-16 w-16 border-t-2 border-b-2 border-pink-500"></div></div>);
@@ -7747,12 +7980,16 @@ const handleSubmit = async (e) => {
         />
       ) : <PaginaInicial />;
           case 'financeiro': return userHasPermission('financeiro') ? <Financeiro data={data} addItem={addItem} updateItem={updateItem} deleteItem={deleteItem} setConfirmDelete={setConfirmDelete} /> : <PaginaInicial />;
-      case 'configuracoes': return userHasPermission('configuracoes') ? <Configuracoes user={user} setConfirmDelete={setConfirmDelete} data={data} addItem={addItem} updateItem={updateItem} deleteItem={deleteItem} availableStores={availableStores} storeInfoMap={storeInfoMap} resolveActiveStoreForWrite={resolveActiveStoreForWrite} selectedStoreId={selectedStoreId} storeAlarmSnoozeMap={storeAlarmSnoozeMap} onSaveStoreAlarmSnoozeMinutes={handleSaveStoreAlarmSnoozeMinutes} canManageStoreAlarmConfig={canManageStoreAlarmConfig} onCreateStore={handleCreateStore} /> : <PaginaInicial />;
+      case 'configuracoes': return userHasPermission('configuracoes') ? <Configuracoes user={user} setConfirmDelete={setConfirmDelete} data={data} addItem={addItem} updateItem={updateItem} deleteItem={deleteItem} availableStores={availableStores} storeInfoMap={storeInfoMap} resolveActiveStoreForWrite={resolveActiveStoreForWrite} selectedStoreId={selectedStoreId} storeAlarmSnoozeMap={storeAlarmSnoozeMap} onSaveStoreAlarmSnoozeMinutes={handleSaveStoreAlarmSnoozeMinutes} canManageStoreAlarmConfig={canManageStoreAlarmConfig} onCreateStore={handleCreateStore} onStoreBrandingChange={handleStoreBrandingChange} /> : <PaginaInicial />;
       case 'financeiro': return user?.role === 'admin' ? <Financeiro data={data} addItem={addItem} updateItem={updateItem} deleteItem={deleteItem} setConfirmDelete={setConfirmDelete} /> : <PaginaInicial />;
-      case 'configuracoes': return user?.role === 'admin' ? <Configuracoes user={user} setConfirmDelete={setConfirmDelete} data={data} addItem={addItem} updateItem={updateItem} deleteItem={deleteItem} availableStores={availableStores} storeInfoMap={storeInfoMap} resolveActiveStoreForWrite={resolveActiveStoreForWrite} selectedStoreId={selectedStoreId} storeAlarmSnoozeMap={storeAlarmSnoozeMap} onSaveStoreAlarmSnoozeMinutes={handleSaveStoreAlarmSnoozeMinutes} canManageStoreAlarmConfig={canManageStoreAlarmConfig} onCreateStore={handleCreateStore} /> : <PaginaInicial />;
+      case 'configuracoes': return user?.role === 'admin' ? <Configuracoes user={user} setConfirmDelete={setConfirmDelete} data={data} addItem={addItem} updateItem={updateItem} deleteItem={deleteItem} availableStores={availableStores} storeInfoMap={storeInfoMap} resolveActiveStoreForWrite={resolveActiveStoreForWrite} selectedStoreId={selectedStoreId} storeAlarmSnoozeMap={storeAlarmSnoozeMap} onSaveStoreAlarmSnoozeMinutes={handleSaveStoreAlarmSnoozeMinutes} canManageStoreAlarmConfig={canManageStoreAlarmConfig} onCreateStore={handleCreateStore} onStoreBrandingChange={handleStoreBrandingChange} /> : <PaginaInicial />;
       default: return user ? <PlaceholderPage title={allMenuItems.find(i=>i.id===currentPage)?.label || "Página"} /> : <PaginaInicial />;
     }
   };
+
+  const sidebarLogoUrl = currentStoreIdForDisplay && currentStoreIdForDisplay !== STORE_ALL_KEY
+    ? storeInfoMap[currentStoreIdForDisplay]?.branding?.logoUrl
+    : null;
 
   return (
     // --- REMOVIDO: onClick={unlockAudio} da div principal ---
@@ -7785,7 +8022,7 @@ const handleSubmit = async (e) => {
         
         <div className={`fixed md:relative flex flex-col bg-white shadow-lg h-full transition-transform duration-300 z-40 ${sidebarOpen ? 'translate-x-0' : '-translate-x-full'} ${isDesktop ? (sidebarOpen ? 'w-64' : 'w-20') : 'w-64'}`}>
             <div className="flex items-center justify-between p-4 border-b h-16">
-                <img src="logotipo.png" alt="Logotipo Ana Doceria" className={`h-8 transition-opacity duration-300 ${sidebarOpen ? 'opacity-100' : 'opacity-0'}`} />
+                <img src={sidebarLogoUrl || 'logotipo.png'} alt="Logotipo Ana Doceria" className={`h-8 transition-opacity duration-300 ${sidebarOpen ? 'opacity-100' : 'opacity-0'}`} />
                 <button onClick={() => setSidebarOpen(!sidebarOpen)} className="p-2 rounded-lg hover:bg-pink-50 hidden md:block">
                     <Menu className="w-6 h-6 text-gray-600" />
                 </button>

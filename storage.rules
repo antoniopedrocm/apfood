@@ -17,12 +17,28 @@ service firebase.storage {
         );
     }
 
+    function isOwnerOrManagerForLoja(storeId) {
+      return isAuthenticated()
+        && (
+          getUserDoc().data.role in ['dono', 'gerente']
+          || (getUserDoc().data.lojaId == storeId)
+          || (getUserDoc().data.lojaIds is list && storeId in getUserDoc().data.lojaIds)
+        );
+    }
+
     // Leitura pública do logo para cardápio da loja.
     match /stores/{storeId}/branding/{fileName} {
       allow read: if true;
       allow write: if isAdminOrManagerForStore(storeId)
         && request.resource.size < 1 * 1024 * 1024
         && request.resource.contentType.matches('image/(png|jpeg|webp)');
+    }
+
+    match /lojas/{storeId}/branding/{fileName} {
+      allow read: if isOwnerOrManagerForLoja(storeId);
+      allow write: if isOwnerOrManagerForLoja(storeId)
+        && request.resource.size < 1 * 1024 * 1024
+        && request.resource.contentType.matches('image/(png|jpeg|jpg|svg\+xml)');
     }
 
     // Fallback: qualquer outro arquivo exige auth.
