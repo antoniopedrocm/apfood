@@ -21,6 +21,15 @@ service cloud.firestore {
       return isAuthenticated() && request.auth.uid == uid;
     }
 
+    function isOwnerOrManagerForLoja(lojaId) {
+      return isAuthenticated()
+        && (
+          getUserDoc().data.role in ['dono', 'gerente']
+          || (getUserDoc().data.lojaId == lojaId)
+          || (getUserDoc().data.lojaIds is list && lojaId in getUserDoc().data.lojaIds)
+        );
+    }
+
     function hasOnlyPreferenceFields() {
       return request.resource.data.diff(resource.data).changedKeys().hasOnly(['preferences']);
     }
@@ -112,6 +121,11 @@ service cloud.firestore {
     }
 
     match /lojas/{lojaId} {
+      allow update: if isOwnerOrManagerForLoja(lojaId)
+        && request.resource.data.diff(resource.data).changedKeys().hasOnly(['branding'])
+        && request.resource.data.branding is map
+        && request.resource.data.branding.keys().hasOnly(['logoUrl', 'logoPath', 'updatedAt', 'updatedBy']);
+
       match /produtos/{produtoId} {
         allow read: if true;
         allow write: if request.auth != null;
