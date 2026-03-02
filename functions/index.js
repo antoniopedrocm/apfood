@@ -197,6 +197,29 @@ const generateStoreId = (value) => {
     .slice(0, 50) || `loja-${Date.now()}`;
 };
 
+const normalizeStoreIdentifier = (value) => {
+  if (!value) return "";
+
+  return String(value)
+    .normalize("NFD")
+    .replace(/[\u0300-\u036f]/g, "")
+    .toLowerCase()
+    .replace(/\s+/g, "-")
+    .replace(/[^a-z0-9_-]/g, "-")
+    .replace(/-+/g, "-")
+    .replace(/^[-_]+|[-_]+$/g, "")
+    .slice(0, 40);
+};
+
+const normalizeStoreNameKey = (value) => {
+  return String(value || "")
+    .normalize("NFD")
+    .replace(/[\u0300-\u036f]/g, "")
+    .toLowerCase()
+    .replace(/[^a-z0-9]+/g, "")
+    .slice(0, 80);
+};
+
 const getStoreRef = (storeId) => db.collection("lojas").doc(storeId);
 
 const getDistance = (lat1, lon1, lat2, lon2) => {
@@ -612,6 +635,48 @@ app.post("/cupons/verificar", async (req, res) => {
 // Exporta o app Express como uma Cloud Function HTTP
 exports.api = onRequest(app);
 
+exports.checkStoreAvailability = onCall(async (request) => {
+  const uid = request.auth?.uid;
+  if (!uid) {
+    throw new HttpsError("unauthenticated", "Você precisa estar autenticado.");
+  }
+
+  await verifyManagementAccess(uid);
+
+  const rawName = typeof request.data?.name === "string" ? request.data.name.trim() : "";
+  const rawSlug = typeof request.data?.slug === "string" ? request.data.slug.trim() : "";
+  const excludeStoreId = typeof request.data?.excludeStoreId === "string" ? request.data.excludeStoreId.trim() : "";
+
+  const normalizedSlug = normalizeStoreIdentifier(rawSlug || rawName);
+  const normalizedNameKey = normalizeStoreNameKey(rawName);
+
+  if (!normalizedSlug || !normalizedNameKey) {
+    return {available: false, reason: "Informe um nome válido para validar disponibilidade."};
+  }
+
+  const allStoresSnap = await db.collection("lojas").get();
+  const conflict = allStoresSnap.docs.find((docSnap) => {
+    if (excludeStoreId && docSnap.id === excludeStoreId) return false;
+    const data = docSnap.data() || {};
+    if (data.isDeleted) return false;
+    const candidateSlug = normalizeStoreIdentifier(data.slug || docSnap.id);
+    const candidateNameKey = normalizeStoreNameKey(data.nome || "");
+    return candidateSlug === normalizedSlug || candidateNameKey === normalizedNameKey || docSnap.id === normalizedSlug;
+  });
+
+  if (!conflict) {
+    return {available: true, slug: normalizedSlug};
+  }
+
+  const suggestion = `${normalizedSlug}-2`.slice(0, 40);
+  return {
+    available: false,
+    slug: normalizedSlug,
+    suggestion,
+    reason: "Já existe loja com este nome/identificador.",
+  };
+});
+
 // Cria uma nova loja e garante que os dados fiquem isolados por loja
 exports.createStore = onCall(async (request) => {
   const uid = request.auth?.uid;
@@ -628,15 +693,31 @@ exports.createStore = onCall(async (request) => {
 
   const rawName = typeof request.data?.nome === "string" ? request.data.nome.trim() : "";
   const rawId = typeof request.data?.storeId === "string" ? request.data.storeId.trim() : "";
+  const rawSlug = typeof request.data?.slug === "string" ? request.data.slug.trim() : "";
 
   if (!rawName) {
     throw new HttpsError("invalid-argument", "Informe o nome da loja.");
   }
 
-  const normalizedId = generateStoreId(rawId || rawName);
-
-  if (!normalizedId || normalizedId === STORE_ALL_KEY) {
+  const normalizedSlug = normalizeStoreIdentifier(rawSlug || rawId || rawName);
+  if (!normalizedSlug || normalizedSlug.length < 3 || normalizedSlug.length > 40 || normalizedSlug === STORE_ALL_KEY) {
     throw new HttpsError("invalid-argument", "Identificador inválido para a loja.");
+  }
+
+  const normalizedId = normalizedSlug;
+  const normalizedNameKey = normalizeStoreNameKey(rawName);
+  const allStoresSnap = await db.collection("lojas").get();
+  const conflictingStore = allStoresSnap.docs.find((docSnap) => {
+    if (docSnap.id === normalizedId) return !docSnap.data()?.isDeleted;
+    const data = docSnap.data() || {};
+    if (data.isDeleted) return false;
+    const candidateSlug = normalizeStoreIdentifier(data.slug || docSnap.id);
+    const candidateNameKey = normalizeStoreNameKey(data.nome || "");
+    return candidateSlug === normalizedSlug || candidateNameKey === normalizedNameKey;
+  });
+
+  if (conflictingStore) {
+    throw new HttpsError("already-exists", "STORE_ID_TAKEN");
   }
 
   const storeDocRef = db.collection("lojas").doc(normalizedId);
@@ -651,6 +732,8 @@ exports.createStore = onCall(async (request) => {
 
     const storePayload = {
       nome: rawName,
+      slug: normalizedSlug,
+      normalizedName: normalizedNameKey,
       criadoEm: timestamp,
       criadoPor: uid,
     };
@@ -724,6 +807,7 @@ exports.createStore = onCall(async (request) => {
     storeId: normalizedId,
     storeData: {
       nome: rawName,
+      slug: normalizedSlug,
     },
     assignedStoreIds,
     primaryStoreId,
