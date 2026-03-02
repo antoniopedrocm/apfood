@@ -641,6 +641,38 @@ const generateStoreId = (value) => {
   return cleaned || `loja-${Date.now()}`;
 };
 
+const normalizeTenantSlug = (tenantValue) => {
+  const base = (tenantValue || '')
+    .normalize('NFD')
+    .replace(/[\u0300-\u036f]/g, '')
+    .toLowerCase()
+    .replace(/[^a-z0-9-]/g, '')
+    .replace(/-+/g, '-')
+    .replace(/^-+|-+$/g, '');
+
+  return base.replace(/-/g, '') || 'tenant';
+};
+
+const slugifyStoreName = (value) => {
+  return generateStoreId(value).replace(/[^a-z0-9_-]/g, '-').slice(0, 40);
+};
+
+const normalizeStoreIdentifier = (value) => {
+  const normalized = (value || '')
+    .normalize('NFD')
+    .replace(/[\u0300-\u036f]/g, '')
+    .toLowerCase()
+    .replace(/\s+/g, '-')
+    .replace(/[^a-z0-9_-]/g, '-')
+    .replace(/-+/g, '-')
+    .replace(/^[-_]+|[-_]+$/g, '')
+    .slice(0, 40);
+
+  return normalized;
+};
+
+const buildStorePublicPath = (tenantSlug, lojaSlug) => `${tenantSlug}_${lojaSlug}`;
+
 const StoreManagerModal = ({
   isOpen,
   onClose,
@@ -2555,7 +2587,7 @@ function App() {
         selectStoreById(event.target.value);
   }, [selectStoreById]);
 
-  const handleCreateStore = useCallback(async ({ storeId, nome }) => {
+  const handleCreateStore = useCallback(async ({ storeId, nome, slug }) => {
         const trimmedId = typeof storeId === 'string' ? storeId.trim() : '';
         const trimmedName = typeof nome === 'string' ? nome.trim() : '';
 
@@ -2567,7 +2599,7 @@ function App() {
 
         try {
           const createStoreFn = httpsCallable(functions, 'createStore');
-          const result = await createStoreFn({ storeId: trimmedId, nome: trimmedName });
+          const result = await createStoreFn({ storeId: trimmedId, nome: trimmedName, slug: typeof slug === 'string' ? slug.trim() : '' });
           const response = (result && result.data) || {};
           const createdStoreId = response.storeId || generateStoreId(trimmedId || trimmedName);
 
@@ -5382,6 +5414,39 @@ const effectiveStoreName = useMemo(() => {
     const [isDeletingStore, setIsDeletingStore] = useState(false);
     const [storeAvailabilityConfig, setStoreAvailabilityConfig] = useState(null);
     const [storeAvailabilityLoading, setStoreAvailabilityLoading] = useState(false);
+
+    const tenantSlugPreview = useMemo(() => {
+        const storedTenantSlug = sessionStorage.getItem(AUTH_TENANT_SLUG_KEY) || '';
+        const hostTenantSlug = getTenantSlugFromHostname(window.location.hostname) || '';
+        const fallback = user?.tenantSlug || user?.brandSlug || '';
+        return normalizeTenantSlug(storedTenantSlug || hostTenantSlug || fallback);
+    }, [user]);
+
+    const storeSlugSuggestion = useMemo(() => {
+        if (storeFormData.slug && storeFormData.slug.trim()) {
+            return normalizeStoreIdentifier(storeFormData.slug);
+        }
+        return slugifyStoreName(storeFormData.nome || '');
+    }, [storeFormData.nome, storeFormData.slug]);
+
+    const storeIdentifierError = useMemo(() => {
+        const hasCustomIdentifier = Boolean((storeFormData.slug || '').trim());
+        if (!hasCustomIdentifier) return '';
+
+        if (!storeSlugSuggestion || storeSlugSuggestion.length < 3 || storeSlugSuggestion.length > 40) {
+            return 'O identificador deve ter entre 3 e 40 caracteres.';
+        }
+
+        if (!/^[a-z0-9_-]+$/.test(storeSlugSuggestion)) {
+            return 'Use apenas letras, números, hífen e underline no identificador.';
+        }
+
+        if (storeSlugSuggestion === STORE_ALL_KEY) {
+            return 'Identificador inválido.';
+        }
+
+        return '';
+    }, [storeFormData.slug, storeSlugSuggestion]);
 	
 	    const userRoles = useMemo(() => {
         const roles = new Set((usuarios || []).map((userItem) => userItem.role).filter(Boolean));
@@ -5432,6 +5497,7 @@ const effectiveStoreName = useMemo(() => {
         setEditingStoreId(null);
         setStoreFormData({ nome: '', slug: '' });
         setStoreFormError('');
+        setStoreAvailabilityConfig(null);
         setShowStoreModal(true);
     }, []);
 
@@ -5442,8 +5508,46 @@ const effectiveStoreName = useMemo(() => {
             slug: store.slug || ''
         });
         setStoreFormError('');
+        setStoreAvailabilityConfig(null);
         setShowStoreModal(true);
     }, []);
+
+    useEffect(() => {
+        if (!showStoreModal) {
+            setStoreAvailabilityConfig(null);
+            setStoreAvailabilityLoading(false);
+            return;
+        }
+
+        const nome = (storeFormData.nome || '').trim();
+        if (!nome || storeIdentifierError || !storeSlugSuggestion) {
+            setStoreAvailabilityConfig(null);
+            setStoreAvailabilityLoading(false);
+            return;
+        }
+
+        const timeout = setTimeout(async () => {
+            setStoreAvailabilityLoading(true);
+            try {
+                const checkStoreAvailabilityFn = httpsCallable(functions, 'checkStoreAvailability');
+                const result = await checkStoreAvailabilityFn({
+                    name: nome,
+                    slug: storeSlugSuggestion,
+                    excludeStoreId: editingStoreId || null,
+                });
+                setStoreAvailabilityConfig((result && result.data) || null);
+            } catch (error) {
+                setStoreAvailabilityConfig({
+                    available: false,
+                    reason: 'Não foi possível validar a disponibilidade agora.'
+                });
+            } finally {
+                setStoreAvailabilityLoading(false);
+            }
+        }, 400);
+
+        return () => clearTimeout(timeout);
+    }, [editingStoreId, showStoreModal, storeFormData.nome, storeIdentifierError, storeSlugSuggestion]);
 
     const hasStoreDependencies = useCallback(async (storeId) => {
         const [pedidosSnap, produtosSnap, usersPrimarySnap, usersSecondarySnap] = await Promise.all([
@@ -5473,10 +5577,20 @@ const effectiveStoreName = useMemo(() => {
         if (user?.role !== ROLE_OWNER) return;
 
         const nome = (storeFormData.nome || '').trim();
-        const slug = (storeFormData.slug || '').trim();
+        const finalSlug = storeSlugSuggestion;
 
         if (!nome) {
             setStoreFormError('Informe o nome da loja.');
+            return;
+        }
+
+        if (storeIdentifierError) {
+            setStoreFormError(storeIdentifierError);
+            return;
+        }
+
+        if (!storeAvailabilityConfig?.available) {
+            setStoreFormError('Nome/identificador indisponível.');
             return;
         }
 
@@ -5485,16 +5599,15 @@ const effectiveStoreName = useMemo(() => {
 
         try {
             if (!editingStoreId) {
-                const generatedId = generateStoreId(slug || nome);
-                await onCreateStore({ storeId: generatedId, nome });
+                await onCreateStore({ storeId: finalSlug, nome, slug: finalSlug });
             } else {
                 const payload = {
                     nome,
+                    slug: finalSlug,
+                    publicPath: buildStorePublicPath(tenantSlugPreview, finalSlug),
                     updatedAt: serverTimestamp(),
                     updatedBy: user?.uid || user?.email || 'unknown'
                 };
-
-                if (slug) payload.slug = slug;
 
                 await setDoc(doc(db, 'lojas', editingStoreId), payload, { merge: true });
             }
@@ -5505,7 +5618,7 @@ const effectiveStoreName = useMemo(() => {
         } finally {
             setIsSavingStore(false);
         }
-    }, [editingStoreId, onCreateStore, storeFormData, user]);
+    }, [editingStoreId, onCreateStore, storeAvailabilityConfig?.available, storeFormData.nome, storeIdentifierError, storeSlugSuggestion, tenantSlugPreview, user]);
 
     const handleDeleteStore = useCallback(async () => {
         if (!storePendingDelete || user?.role !== ROLE_OWNER) return;
@@ -6509,16 +6622,26 @@ const effectiveStoreName = useMemo(() => {
                         required
                     />
                     <Input
-                        label="Slug/identificador (opcional)"
+                        label="Identificador (opcional)"
                         value={storeFormData.slug}
-                        onChange={(e) => setStoreFormData((prev) => ({ ...prev, slug: e.target.value }))}
+                        onChange={(e) => setStoreFormData((prev) => ({ ...prev, slug: normalizeStoreIdentifier(e.target.value) }))}
                         placeholder="Ex: loja-centro"
                     />
+                    {storeIdentifierError && <p className="text-xs text-red-500">{storeIdentifierError}</p>}
+                    <div className="space-y-1">
+                        <p className="text-xs text-gray-600">
+                            {storeAvailabilityLoading ? '⏳ Verificando disponibilidade...' : storeAvailabilityConfig?.available ? '✅ Nome disponível' : (storeAvailabilityConfig?.reason ? '❌ Nome indisponível' : 'Digite o nome para validar disponibilidade')}
+                        </p>
+                        {storeAvailabilityConfig?.suggestion && (
+                            <p className="text-xs text-amber-600">Sugestão: {storeAvailabilityConfig.suggestion}</p>
+                        )}
+                        <p className="text-xs text-gray-500">URL da loja: apfood.com.br/{buildStorePublicPath(tenantSlugPreview, storeSlugSuggestion || 'loja')}</p>
+                    </div>
                     {storeFormError && <p className="text-sm text-red-500">{storeFormError}</p>}
                     <div className="flex justify-end gap-2 pt-2">
                         <Button type="button" variant="secondary" onClick={() => setShowStoreModal(false)}>Cancelar</Button>
-                        <Button type="submit" disabled={isSavingStore}>
-                            <Save className="w-4 h-4" /> {isSavingStore ? 'Salvando...' : 'Salvar loja'}
+                        <Button type="submit" disabled={isSavingStore || !storeFormData.nome.trim() || Boolean(storeIdentifierError) || !storeAvailabilityConfig?.available}>
+                            <Save className="w-4 h-4" /> {isSavingStore ? 'Salvando...' : (editingStoreId ? 'Salvar loja' : 'Criar loja')}
                         </Button>
                     </div>
                 </form>
