@@ -38,7 +38,7 @@ service firebase.storage {
       allow read: if isOwnerOrManagerForLoja(storeId);
       allow write: if isOwnerOrManagerForLoja(storeId)
         && request.resource.size < 1 * 1024 * 1024
-        && request.resource.contentType.matches('image/(png|jpeg|jpg|svg\+xml)');
+        && request.resource.contentType.matches('image/(png|jpeg|jpg|webp)');
     }
 
     // Fallback: qualquer outro arquivo exige auth.
