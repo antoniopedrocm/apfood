@@ -2,6 +2,9 @@ import React from 'react';
 import ReactDOM from 'react-dom/client';
 import './index.css';
 import App from './App';
+import { SessionProvider } from './contexts/SessionProvider';
+import { StoreProvider } from './contexts/StoreContext';
+import { MultiStoreShell } from './components/multistore/MultiStoreShell';
 // Importa o service worker
 import * as serviceWorkerRegistration from './serviceWorker';
 
@@ -19,7 +22,12 @@ if (process.env.NODE_ENV === 'production') {
 const root = ReactDOM.createRoot(document.getElementById('root'));
 root.render(
   <React.StrictMode>
-    <App />
+    <SessionProvider>
+      <StoreProvider>
+        <MultiStoreShell />
+        <App />
+      </StoreProvider>
+    </SessionProvider>
   </React.StrictMode>
 );
 
