@@ -14,6 +14,16 @@ const admin = require("firebase-admin");
 const express = require("express");
 const cors = require("cors");
 const {isStoreOpenNow} = require("./storeAvailability");
+const {
+  normalizeRole: normalizeRbacRole,
+  getAllowedStoreIds,
+  getAllowedFranchiseIds,
+  canAccessStore,
+  createImpersonationToken,
+  withAuthorization,
+  resolveRequestPrincipal,
+  auditLog,
+} = require("./multistoreAuth");
 
 // Inicializa o Firebase Admin SDK
 admin.initializeApp();
@@ -243,6 +253,128 @@ const getLegacyInfoDoc = (storeId) => getStoreRef(storeId).collection("info").do
 const app = express();
 app.use(cors({origin: true})); // Habilita CORS para a API do cardápio
 app.use(express.json());
+app.locals.db = db;
+app.locals.auth = auth;
+
+app.get("/auth/session", async (req, res) => {
+  try {
+    const principal = await resolveRequestPrincipal(req, auth, db);
+    const effectiveUser = principal.effectiveUser;
+    const [allowedStores, allowedFranchises] = await Promise.all([
+      getAllowedStoreIds(db, effectiveUser.id),
+      getAllowedFranchiseIds(db, effectiveUser.id),
+    ]);
+
+    res.json({
+      actor: principal.actor,
+      subject: principal.subject,
+      effectiveUser,
+      impersonating: Boolean(principal.subject),
+      allowedStores,
+      allowedFranchises,
+      viewMode: normalizeRbacRole(effectiveUser.role) === "admin" ? "global" :
+        (normalizeRbacRole(effectiveUser.role) === "franqueador" ? "franchise" : "store"),
+    });
+  } catch (error) {
+    res.status(401).json({message: error.message || "Não autenticado."});
+  }
+});
+
+app.get("/admin/users", withAuthorization(), async (req, res) => {
+  const effectiveRole = normalizeRbacRole(req.principal.effectiveUser.role);
+  if (effectiveRole !== "admin") {
+    return res.status(403).json({message: "Apenas admin pode listar usuários para emulação."});
+  }
+
+  const usersSnapshot = await db.collection("users").get();
+  const users = usersSnapshot.docs.map((doc) => ({id: doc.id, ...doc.data()}));
+  return res.json({users});
+});
+
+app.post("/admin/impersonate", withAuthorization(), async (req, res) => {
+  try {
+    const actor = req.principal.actor;
+    if (normalizeRbacRole(actor.role) !== "admin") {
+      return res.status(403).json({message: "Apenas admin pode emular usuários."});
+    }
+
+    if (req.principal.subject) {
+      return res.status(400).json({message: "Emulação em cadeia não é permitida."});
+    }
+
+    const {subjectUserId, reason} = req.body || {};
+    if (!subjectUserId) {
+      return res.status(400).json({message: "subjectUserId é obrigatório."});
+    }
+
+    const subjectDoc = await db.collection("users").doc(subjectUserId).get();
+    if (!subjectDoc.exists) {
+      return res.status(404).json({message: "Usuário alvo não encontrado."});
+    }
+
+    const impersonation = createImpersonationToken({actorId: actor.id, subjectId: subjectUserId});
+    await auditLog(db, req, {
+      actorId: actor.id,
+      subjectId: subjectUserId,
+      action: "admin.impersonate.start",
+      resourceType: "user",
+      resourceId: subjectUserId,
+      metadata: {reason: reason || null, jti: impersonation.jti},
+    });
+
+    return res.json({
+      impersonationToken: impersonation.token,
+      expiresInSeconds: impersonation.expiresInSeconds,
+      subject: {id: subjectDoc.id, ...subjectDoc.data()},
+    });
+  } catch (error) {
+    return res.status(400).json({message: error.message || "Falha ao iniciar emulação."});
+  }
+});
+
+app.get("/orders", withAuthorization({requireStore: true}), async (req, res) => {
+  const storeId = req.principal.requestedStoreId;
+  const querySnapshot = await db.collection("orders").where("storeId", "==", storeId).limit(100).get();
+  const orders = querySnapshot.docs.map((doc) => ({id: doc.id, ...doc.data()}));
+  res.json({orders, storeId});
+});
+
+app.patch("/orders/:orderId/status", withAuthorization({requireStore: true}), async (req, res) => {
+  try {
+    const {orderId} = req.params;
+    const {status} = req.body || {};
+    const storeId = req.principal.requestedStoreId;
+    if (!status) {
+      return res.status(400).json({message: "status é obrigatório."});
+    }
+
+    const orderRef = db.collection("orders").doc(orderId);
+    const orderSnap = await orderRef.get();
+    if (!orderSnap.exists) {
+      return res.status(404).json({message: "Pedido não encontrado."});
+    }
+    const orderData = orderSnap.data() || {};
+    if (!(await canAccessStore(db, req.principal.effectiveUser, orderData.storeId || storeId))) {
+      return res.status(403).json({message: "Usuário sem acesso ao pedido desta loja."});
+    }
+
+    await orderRef.set({status, updatedAt: admin.firestore.FieldValue.serverTimestamp()}, {merge: true});
+    await auditLog(db, req, {
+      actorId: req.principal.actor.id,
+      subjectId: req.principal.subject ? req.principal.subject.id : null,
+      action: "order.status.update",
+      resourceType: "order",
+      resourceId: orderId,
+      storeId: orderData.storeId || storeId,
+      franchiseId: orderData.franchiseId || null,
+      metadata: {newStatus: status},
+    });
+
+    return res.json({id: orderId, status});
+  } catch (error) {
+    return res.status(400).json({message: error.message || "Não foi possível atualizar o status."});
+  }
+});
 
 const CLIENTS_COLLECTION = "clientes";
 const getClientsCollection = () => db.collection(CLIENTS_COLLECTION);
