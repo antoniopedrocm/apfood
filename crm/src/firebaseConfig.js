@@ -27,11 +27,11 @@ const firebaseConfig = {
   authDomain: envVar('REACT_APP_FIREBASE_AUTH_DOMAIN') ||
     'apfood-e9627.firebaseapp.com',
   projectId: envVar('REACT_APP_FIREBASE_PROJECT_ID') || 'apfood-e9627',
-  // Use the default Firebase storage host (appspot.com). The previous value
-  // pointed to firebasestorage.app, which is only for direct download links
-  // and breaks SDK requests.
+  // Use the bucket ID configured in Firebase Console. For this project the
+  // canonical bucket is `*.firebasestorage.app`; forcing `*.appspot.com`
+  // causes upload preflight failures (reported in production as CORS errors).
   storageBucket:
-    envVar('REACT_APP_FIREBASE_STORAGE_BUCKET') || 'apfood-e9627.appspot.com',
+    envVar('REACT_APP_FIREBASE_STORAGE_BUCKET') || 'apfood-e9627.firebasestorage.app',
   messagingSenderId:
     envVar('REACT_APP_FIREBASE_MESSAGING_SENDER_ID') || '847824537421',
   appId:
