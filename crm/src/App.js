@@ -5088,21 +5088,27 @@ function App() {
     const handleSubmit = async (e) => {
         e.preventDefault();
         setIsUploading(true);
-        let imageUrl = formData.imageUrl || "";
-        if (imageFile) {
-            const imageRef = ref(storage, `products/${Date.now()}_${imageFile.name}`);
-            await uploadBytes(imageRef, imageFile);
-            imageUrl = await getDownloadURL(imageRef);
+        try {
+            let imageUrl = formData.imageUrl || "";
+            if (imageFile) {
+                const imageRef = ref(storage, `products/${Date.now()}_${imageFile.name}`);
+                await uploadBytes(imageRef, imageFile);
+                imageUrl = await getDownloadURL(imageRef);
+            }
+            const productData = { ...formData, preco: parseFloat(formData.preco || 0), custo: parseFloat(formData.custo || 0), estoque: parseInt(formData.estoque || 0), imageUrl: imageUrl };
+            if (editingProduct) {
+                const { id, ...updateData } = productData;
+                await updateItem('produtos', editingProduct.id, updateData);
+            } else {
+                await addItem('produtos', productData);
+            }
+            resetForm();
+        } catch (error) {
+            console.error('Erro ao salvar produto', error);
+            alert(error?.message || 'Não foi possível salvar o produto.');
+        } finally {
+            setIsUploading(false);
         }
-        const productData = { ...formData, preco: parseFloat(formData.preco || 0), custo: parseFloat(formData.custo || 0), estoque: parseInt(formData.estoque || 0), imageUrl: imageUrl };
-        if (editingProduct) {
-            const { id, ...updateData } = productData;
-            await updateItem('produtos', editingProduct.id, updateData);
-        } else {
-            await addItem('produtos', productData);
-        }
-        setIsUploading(false);
-        resetForm();
     };
     const handleEdit = (product) => {
       setEditingProduct(product);
