@@ -12,12 +12,31 @@ import {
 import { CTA_VARIANT } from '../../config/featureFlags';
 import { getCtaVariantColor, trackCtaClick } from '../../utils/ctaVariant';
 import { db } from '../../firebaseConfig';
-import { collection, collectionGroup, getDocs, query, where } from 'firebase/firestore';
+import { collection, collectionGroup, getDocs, limit, query, where } from 'firebase/firestore';
 import { Badge } from '../ui/Badge';
 import { Button } from '../ui/Button';
 import { Card } from '../ui/Card';
 import { Chip } from '../ui/Chip';
 import { Input } from '../ui/Input';
+
+/**
+ * Firestore indexes recomendados para HomePage.jsx
+ *
+ * INDEX 1
+ * collectionGroup: produtos
+ * field: status
+ * order: ASC
+ *
+ * INDEX 2 (se houver ordenação por data)
+ * collectionGroup: produtos
+ * field: status ASC
+ * field: createdAt DESC
+ *
+ * INDEX 3 (se houver ordenação por popularidade)
+ * collectionGroup: produtos
+ * field: status ASC
+ * field: pedidos DESC
+ */
 
 const copyOptions = [
   {
@@ -43,6 +62,73 @@ const copyOptions = [
 const quickCategories = ['Pizza', 'Hambúrguer', 'Japonês', 'Mercado', 'Sobremesa', 'Bebidas'];
 
 const EMPTY_STATE_LABEL = 'Nenhum produto ativo disponível no momento';
+
+const buildCatalogProduct = (docSnap, product = {}, storeNameById = new Map()) => {
+  const storeId = product.lojaId || docSnap.ref.parent.parent?.id || '';
+
+  return {
+    id: docSnap.id,
+    nome: product.nome || product.name || 'Produto',
+    preco: product.preco,
+    lojaId: storeId,
+    lojaNome: storeNameById.get(storeId) || product.lojaNome || 'Loja',
+    status: product.status,
+    active: product.active,
+    tempoEntrega: product.tempoEntrega,
+    tempoEstimado: product.tempoEstimado,
+    tempoPreparo: product.tempoPreparo,
+    taxaEntrega: product.taxaEntrega,
+    frete: product.frete,
+    updatedAt: product.updatedAt,
+    createdAt: product.createdAt,
+    totalPedidos: product.totalPedidos,
+    maisPedido: product.maisPedido,
+    orderCount: product.orderCount,
+    pedidosCount: product.pedidosCount,
+    salesCount: product.salesCount,
+    rating: product.rating,
+    avaliacao: product.avaliacao,
+    nota: product.nota,
+    promocao: product.promocao,
+    promo: product.promo,
+    isPromotion: product.isPromotion,
+    freteGratis: product.freteGratis,
+    cupom: product.cupom,
+    cupomCodigo: product.cupomCodigo,
+    descontoPercentual: product.descontoPercentual,
+    desconto: product.desconto,
+    publicPath: product.publicPath,
+    cardapioPath: product.cardapioPath,
+  };
+};
+
+const fetchActiveProductsCatalog = async (storeNameById) => {
+  try {
+    // IMPORTANTE:
+    // Essa consulta exige índice Firestore:
+    // collectionGroup: produtos
+    // field: status (Ascending)
+    // Criar no console: Firestore → Indexes → Add Index
+    const produtosRef = collectionGroup(db, 'produtos');
+    const q = query(produtosRef, where('status', '==', 'Ativo'), limit(50));
+    const snapshot = await getDocs(q);
+
+    return snapshot.docs
+      .map((docSnap) => buildCatalogProduct(docSnap, docSnap.data() || {}, storeNameById))
+      .filter((product) => isProductActive(product));
+  } catch (err) {
+    const errorMessage = String(err?.message || '').toLowerCase();
+    if (errorMessage.includes('requires an index')) {
+      console.warn(
+        "Índice Firestore necessário para collectionGroup('produtos'). Verifique: field status (ASC)."
+      );
+      console.error(err);
+      return [];
+    }
+
+    throw err;
+  }
+};
 
 const resolveDateValue = (value) => {
   if (!value) return 0;
@@ -148,11 +234,7 @@ export const HomePage = () => {
       setLoadingProducts(true);
 
       try {
-        const [storesSnapshot, activeStatusSnapshot, activeBooleanSnapshot] = await Promise.all([
-          getDocs(collection(db, 'lojas')),
-          getDocs(query(collectionGroup(db, 'produtos'), where('status', '==', 'Ativo'))),
-          getDocs(query(collectionGroup(db, 'produtos'), where('active', '==', true))),
-        ]);
+        const storesSnapshot = await getDocs(collection(db, 'lojas'));
 
         if (!isMounted) return;
 
@@ -160,20 +242,11 @@ export const HomePage = () => {
           storesSnapshot.docs.map((storeDoc) => [storeDoc.id, (storeDoc.data() || {}).nome || storeDoc.id])
         );
 
-        const uniqueProducts = new Map();
-        [...activeStatusSnapshot.docs, ...activeBooleanSnapshot.docs].forEach((docSnap) => {
-          const data = docSnap.data() || {};
-          if (!isProductActive(data)) return;
-          const storeId = data.lojaId || docSnap.ref.parent.parent?.id || '';
-          uniqueProducts.set(docSnap.ref.path, {
-            id: docSnap.id,
-            ...data,
-            lojaId: storeId,
-            lojaNome: storeNameById.get(storeId) || data.lojaNome || 'Loja',
-          });
-        });
+        const activeProducts = await fetchActiveProductsCatalog(storeNameById);
 
-        setAllActiveProducts(Array.from(uniqueProducts.values()));
+        if (!isMounted) return;
+
+        setAllActiveProducts(activeProducts);
       } catch (error) {
         console.error('Erro ao carregar produtos ativos da Home:', error);
         if (isMounted) setAllActiveProducts([]);
