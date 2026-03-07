@@ -59,6 +59,7 @@ const copyOptions = [
 const quickCategories = ['Pizza', 'Hambúrguer', 'Japonês', 'Mercado', 'Sobremesa', 'Bebidas'];
 
 const EMPTY_STATE_LABEL = 'Nenhum produto ativo disponível no momento';
+const PRODUCT_PLACEHOLDER_IMAGE = '/images/product-placeholder.png';
 
 const buildCatalogProduct = (docSnap, product = {}, storeNameById = new Map()) => {
   const storeId = product.lojaId || docSnap.ref.parent.parent?.id || '';
@@ -96,6 +97,13 @@ const buildCatalogProduct = (docSnap, product = {}, storeNameById = new Map()) =
     desconto: product.desconto,
     publicPath: product.publicPath,
     cardapioPath: product.cardapioPath,
+    imageUrl:
+      product.imageUrl ||
+      product.image ||
+      product.foto ||
+      product.photoUrl ||
+      product.thumbnail ||
+      PRODUCT_PLACEHOLDER_IMAGE,
   };
 };
 
@@ -295,6 +303,7 @@ export const HomePage = () => {
           price: formatCurrency(item.preco),
           storeName: item.lojaNome || 'Loja',
           href: item.publicPath || item.cardapioPath || null,
+          imageUrl: item.imageUrl || item.image || item.foto || PRODUCT_PLACEHOLDER_IMAGE,
         }));
 
       return {
@@ -358,22 +367,33 @@ export const HomePage = () => {
                   onClick={() => item.href && window.open(item.href, '_self')}
                   className="w-full text-left"
                 >
-                  <div className="card-top">
-                    <h3>{item.name}</h3>
-                    {item.tag ? <Badge>{item.tag}</Badge> : null}
-                  </div>
-                  <p className="text-sm text-gray-500 mb-1">{item.storeName}</p>
-                  <p className="text-sm font-medium text-gray-700 mb-2">{item.price}</p>
-                  <div className="card-meta">
-                    {item.rating > 0 ? (
-                      <span>
-                        <Star size={14} aria-hidden="true" /> {item.rating.toFixed(1)}
-                      </span>
-                    ) : null}
-                    <span>
-                      <Clock3 size={14} aria-hidden="true" /> {item.eta}
-                    </span>
-                    <span>{item.fee}</span>
+                  <div className="flex items-center gap-4 bg-white rounded-xl p-4 shadow-sm hover:shadow-md transition">
+                    <img
+                      src={item.imageUrl || PRODUCT_PLACEHOLDER_IMAGE}
+                      alt={item.name}
+                      className="w-16 h-16 md:w-24 md:h-24 object-cover rounded-lg"
+                      loading="lazy"
+                    />
+
+                    <div className="flex flex-col min-w-0 flex-1">
+                      <div className="card-top">
+                        <h3 className="truncate">{item.name}</h3>
+                        {item.tag ? <Badge>{item.tag}</Badge> : null}
+                      </div>
+                      <p className="text-sm text-gray-500 mb-1 truncate">{item.storeName}</p>
+                      <p className="text-sm font-medium text-gray-700 mb-2">{item.price}</p>
+                      <div className="card-meta">
+                        {item.rating > 0 ? (
+                          <span>
+                            <Star size={14} aria-hidden="true" /> {item.rating.toFixed(1)}
+                          </span>
+                        ) : null}
+                        <span>
+                          <Clock3 size={14} aria-hidden="true" /> {item.eta}
+                        </span>
+                        <span>{item.fee}</span>
+                      </div>
+                    </div>
                   </div>
                 </button>
               </Card>
