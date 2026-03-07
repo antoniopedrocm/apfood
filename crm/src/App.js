@@ -8250,61 +8250,88 @@ const handleSubmit = async (e) => {
                     )
                 )}
             </div>
-            <div className="flex items-center gap-4">
-                                {user && (
-                                        <div className="relative">
-                                                <button onClick={() => setShowNotifications(!showNotifications)} className="relative p-2 rounded-full hover:bg-gray-100">
-							<Bell className="w-5 h-5 text-gray-600" />
-							{pendingOrders.length > 0 && 
-								<span className="absolute -top-1 -right-1 bg-red-500 text-white text-xs rounded-full h-4 w-4 flex items-center justify-center animate-pulse">
-									{pendingOrders.length}
-								</span>
-							}
-						</button>
-						{showNotifications && (
-							<div className="absolute right-0 mt-2 w-80 bg-white rounded-lg shadow-xl z-20 border">
-								<div className="p-4 font-bold border-b">Pedidos Pendentes ({pendingOrders.length})</div>
-								<div className="p-2 max-h-96 overflow-y-auto">
-									{pendingOrders.length > 0 ? (
-										pendingOrders.map(order => (
-											<div key={order.id} className="p-2 border-b hover:bg-gray-50 cursor-pointer" onClick={() => { setCurrentPage('pedidos'); setShowNotifications(false); }}>
-												<p className="font-semibold">{order.clienteNome || 'Cliente'}</p>
-												<p className="text-sm text-gray-500">ID: {order.id?.substring(0,8) || 'N/A'}</p>
-												<p className="text-sm text-gray-500">Data: {getJSDate(order.createdAt)?.toLocaleDateString() || '-'}</p>
-												<p className="text-sm">Status: <span className="font-medium">{order.status}</span></p>
-											</div>
-										))
-									) : (
-										<p className="p-4 text-center text-gray-500">Nenhum pedido pendente.</p>
-									)}
-								</div>
-							</div>
-						)}
-					</div>
-				)}
-				
-				<div className="relative">
-					<button onClick={() => {
-						if (!user) {
-							setShowLogin(true);
-							setShowPasswordReset(false);
-							setPasswordResetMessage({ text: '', type: '' });
-						} else {
-							setShowUserMenu(!showUserMenu);
-						}
-					}} className="p-2 rounded-full hover:bg-gray-100">
-						<UserIcon className="w-6 h-6 text-gray-600" />
-					</button>
-					{user && <span className="absolute top-0 right-0 w-2 h-2 bg-green-500 rounded-full border-2 border-white"></span>}
-					{showUserMenu && user && (
-						<div className="absolute right-0 mt-2 w-48 bg-white rounded-md shadow-xl z-20 border p-2">
-							<p className="px-2 py-1 text-sm text-gray-700 font-semibold truncate">{user.auth.displayName || user.auth.email}</p>
+            <div className="flex items-center justify-end gap-2 sm:gap-3 flex-wrap">
+                <button
+                    type="button"
+                    className="inline-flex items-center gap-2 rounded-xl border border-gray-300 bg-white px-3 py-2 text-sm text-gray-700 hover:bg-gray-50 focus:outline-none focus:ring-2 focus:ring-pink-500"
+                    aria-label="Selecionar localização de entrega"
+                >
+                    <MapPin className="w-4 h-4" aria-hidden="true" />
+                    <span>Entregar em: Setor Central, Goiânia</span>
+                </button>
+
+                <button
+                    type="button"
+                    onClick={() => setCurrentPage('pedidos')}
+                    className="inline-flex items-center gap-2 rounded-xl border border-gray-300 bg-white px-3 py-2 text-sm text-gray-700 hover:bg-gray-50 focus:outline-none focus:ring-2 focus:ring-pink-500"
+                    aria-label="Abrir carrinho"
+                >
+                    <ShoppingCart className="w-4 h-4" aria-hidden="true" />
+                    <span>Carrinho</span>
+                </button>
+
+                <div className="relative">
+                    <button
+                        type="button"
+                        onClick={() => {
+                            if (!user) {
+                                setShowLogin(true);
+                                setShowPasswordReset(false);
+                                setPasswordResetMessage({ text: '', type: '' });
+                                return;
+                            }
+                            setShowUserMenu(!showUserMenu);
+                        }}
+                        className="inline-flex items-center gap-2 rounded-xl border border-gray-300 bg-white px-3 py-2 text-sm text-gray-700 hover:bg-gray-50 focus:outline-none focus:ring-2 focus:ring-pink-500"
+                        aria-label={user ? 'Abrir menu da conta' : 'Entrar'}
+                    >
+                        <UserIcon className="w-4 h-4" aria-hidden="true" />
+                        <span>Entrar</span>
+                    </button>
+                    {user && showUserMenu && (
+                        <div className="absolute right-0 mt-2 w-48 bg-white rounded-md shadow-xl z-20 border p-2">
+                            <p className="px-2 py-1 text-sm text-gray-700 font-semibold truncate">{user.auth.displayName || user.auth.email}</p>
                             <button onClick={() => { setCurrentPage('configuracoes'); setShowUserMenu(false); }} className="w-full text-left px-2 py-1 text-sm text-gray-600 hover:bg-gray-100 rounded">Configurações</button>
                             <button onClick={handleLogout} className="w-full text-left px-2 py-1 text-sm text-red-600 hover:bg-red-50 rounded">Sair</button>
-						</div>
-					)}
-				</div>
-			</div>
+                        </div>
+                    )}
+                </div>
+
+                <div className="relative">
+                    <button
+                        onClick={() => setShowNotifications(!showNotifications)}
+                        className="relative inline-flex items-center justify-center rounded-xl border border-gray-300 bg-white p-2 text-gray-700 hover:bg-gray-50 focus:outline-none focus:ring-2 focus:ring-pink-500"
+                        aria-label="Abrir notificações"
+                    >
+                        <Bell className="w-5 h-5" aria-hidden="true" />
+                        {pendingOrders.length > 0 && (
+                            <span className="absolute -top-1 -right-1 bg-red-500 text-white text-xs rounded-full h-4 w-4 flex items-center justify-center animate-pulse">
+                                {pendingOrders.length}
+                            </span>
+                        )}
+                    </button>
+                    {showNotifications && (
+                        <div className="absolute right-0 mt-2 w-80 bg-white rounded-lg shadow-xl z-20 border">
+                            <div className="p-4 font-bold border-b">Pedidos Pendentes ({pendingOrders.length})</div>
+                            <div className="p-2 max-h-96 overflow-y-auto">
+                                {pendingOrders.length > 0 ? (
+                                    pendingOrders.map(order => (
+                                        <div key={order.id} className="p-2 border-b hover:bg-gray-50 cursor-pointer" onClick={() => { setCurrentPage('pedidos'); setShowNotifications(false); }}>
+                                            <p className="font-semibold">{order.clienteNome || 'Cliente'}</p>
+                                            <p className="text-sm text-gray-500">ID: {order.id?.substring(0,8) || 'N/A'}</p>
+                                            <p className="text-sm text-gray-500">Data: {getJSDate(order.createdAt)?.toLocaleDateString() || '-'}</p>
+                                            <p className="text-sm">Status: <span className="font-medium">{order.status}</span></p>
+                                        </div>
+                                    ))
+                                ) : (
+                                    <p className="p-4 text-center text-gray-500">Nenhum pedido pendente.</p>
+                                )}
+                            </div>
+                        </div>
+                    )}
+                </div>
+
+            </div>
         </div>
         <main className="flex-1 overflow-y-auto">
             {renderCurrentPage()}

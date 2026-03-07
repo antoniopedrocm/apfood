@@ -2,12 +2,9 @@ import React, { useEffect, useMemo, useState } from 'react';
 import {
   Clock3,
   CreditCard,
-  MapPin,
   MessageCircle,
   Search,
-  ShoppingCart,
   Star,
-  User,
 } from 'lucide-react';
 import { CTA_VARIANT } from '../../config/featureFlags';
 import { getCtaVariantColor, trackCtaClick } from '../../utils/ctaVariant';
@@ -291,24 +288,12 @@ export const HomePage = () => {
 
   return (
     <main className="home-page">
-      <header className="home-header">
-        <div className="home-header__content container-shell">
-          <div className="home-logo">APFood</div>
-          <button className="header-link" type="button" aria-label="Selecionar localização">
-            <MapPin size={16} aria-hidden="true" /> Entregar em: Setor Central, Goiânia
-          </button>
-          <div className="home-search-wrap">
-            <Search className="search-icon" size={18} aria-hidden="true" />
-            <Input aria-label="Buscar pratos" placeholder="Buscar pratos, restaurantes, doces, …" />
-          </div>
-          <button className="header-link" type="button" aria-label="Abrir conta">
-            <User size={16} aria-hidden="true" /> Entrar
-          </button>
-          <button className="header-link" type="button" aria-label="Abrir carrinho">
-            <ShoppingCart size={16} aria-hidden="true" /> Carrinho
-          </button>
+      <section className="home-search-section container-shell" aria-label="Busca de restaurantes e pratos">
+        <div className="home-search-wrap">
+          <Search className="search-icon" size={18} aria-hidden="true" />
+          <Input aria-label="Buscar pratos" placeholder="Buscar pratos, restaurantes, doces, …" />
         </div>
-      </header>
+      </section>
 
       <section className="hero container-shell">
         <p className="eyebrow">Entrega local com curadoria</p>
