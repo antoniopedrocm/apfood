@@ -1,4 +1,4 @@
-import React from 'react';
+import React, { useEffect, useMemo, useState } from 'react';
 import {
   Clock3,
   CreditCard,
@@ -11,6 +11,8 @@ import {
 } from 'lucide-react';
 import { CTA_VARIANT } from '../../config/featureFlags';
 import { getCtaVariantColor, trackCtaClick } from '../../utils/ctaVariant';
+import { db } from '../../firebaseConfig';
+import { collection, collectionGroup, getDocs, query, where } from 'firebase/firestore';
 import { Badge } from '../ui/Badge';
 import { Button } from '../ui/Button';
 import { Card } from '../ui/Card';
@@ -40,38 +42,179 @@ const copyOptions = [
 
 const quickCategories = ['Pizza', 'Hambúrguer', 'Japonês', 'Mercado', 'Sobremesa', 'Bebidas'];
 
-const sectionCards = {
-  'Populares perto de você': [
-    { name: 'Brasa Burger', rating: '4.8', eta: '25-35 min', fee: 'R$ 5,90', tag: 'Mais pedido' },
-    { name: 'Sushi Nipo House', rating: '4.9', eta: '35-45 min', fee: 'Grátis', tag: 'Entrega rápida' },
-    { name: 'Pizzaria da Praça', rating: '4.7', eta: '30-40 min', fee: 'R$ 3,99', tag: 'Top da região' },
-  ],
-  'Promoções / Frete grátis / Cupons': [
-    { name: 'Combo Família + Cupom', rating: '4.8', eta: '30-40 min', fee: 'Grátis', tag: 'Cupom AQUI10' },
-    { name: 'Doces da Vovó', rating: '4.9', eta: '20-30 min', fee: 'R$ 2,99', tag: 'Leve 3 pague 2' },
-    { name: 'Mercado Express', rating: '4.6', eta: '18-28 min', fee: 'Grátis', tag: 'Frete grátis' },
-  ],
-  'Bem avaliados': [
-    { name: 'Forno de Minas', rating: '4.9', eta: '22-32 min', fee: 'R$ 4,50', tag: 'Qualidade premium' },
-    { name: 'Taco Del Sol', rating: '4.8', eta: '28-38 min', fee: 'R$ 5,50', tag: 'Atendimento nota 10' },
-    { name: 'Salad Fresh', rating: '4.8', eta: '20-30 min', fee: 'R$ 3,90', tag: 'Saudável' },
-  ],
-  Categorias: quickCategories.map((category) => ({
-    name: category,
-    rating: '4.7+',
-    eta: '20-45 min',
-    fee: 'a partir de R$ 0,00',
-    tag: 'Explorar',
-  })),
-  Novos: [
-    { name: 'Padaria do Bairro', rating: '4.6', eta: '20-35 min', fee: 'R$ 4,99', tag: 'Novo por aqui' },
-    { name: 'Poke Tropical', rating: '4.7', eta: '25-35 min', fee: 'R$ 3,99', tag: 'Lançamento' },
-    { name: 'Casa do Açaí', rating: '4.8', eta: '15-25 min', fee: 'Grátis', tag: 'Novidade gelada' },
-  ],
+const EMPTY_STATE_LABEL = 'Nenhum produto ativo disponível no momento';
+
+const resolveDateValue = (value) => {
+  if (!value) return 0;
+  if (typeof value?.toDate === 'function') return value.toDate().getTime();
+  const parsed = new Date(value).getTime();
+  return Number.isNaN(parsed) ? 0 : parsed;
 };
+
+const resolveNumber = (value) => {
+  if (typeof value === 'number' && Number.isFinite(value)) return value;
+  if (typeof value === 'string') {
+    const normalized = Number(value.replace(',', '.'));
+    return Number.isFinite(normalized) ? normalized : 0;
+  }
+  return 0;
+};
+
+const isProductActive = (product = {}) => {
+  if (product.status === 'Ativo') return true;
+  if (product.active === true) return true;
+  return false;
+};
+
+const resolvePopularity = (item = {}) => {
+  const popularityKeys = ['totalPedidos', 'maisPedido', 'orderCount', 'pedidosCount', 'salesCount'];
+  return popularityKeys.reduce((acc, key) => {
+    const value = resolveNumber(item[key]);
+    return value > acc ? value : acc;
+  }, 0);
+};
+
+const resolveRating = (item = {}) => {
+  return resolveNumber(item.rating ?? item.avaliacao ?? item.nota);
+};
+
+const isPromotionalProduct = (item = {}) => {
+  return Boolean(
+    item.promocao ||
+      item.promo ||
+      item.isPromotion ||
+      item.freteGratis ||
+      item.cupom ||
+      item.cupomCodigo ||
+      resolveNumber(item.descontoPercentual) > 0 ||
+      resolveNumber(item.desconto) > 0
+  );
+};
+
+const getBadgeForSection = (sectionName, item) => {
+  if (sectionName === 'Populares perto de você' && resolvePopularity(item) > 0) return 'Mais pedido';
+  if (sectionName === 'Promoções / Frete grátis / Cupons') {
+    if (item.cupomCodigo) return `Cupom ${item.cupomCodigo}`;
+    if (item.freteGratis) return 'Frete grátis';
+    if (isPromotionalProduct(item)) return 'Promoção';
+  }
+  if (sectionName === 'Bem avaliados' && resolveRating(item) > 0) return 'Bem avaliado';
+  if (sectionName === 'Novos') return 'Novo';
+  return '';
+};
+
+const formatCurrency = (value) => {
+  const amount = resolveNumber(value);
+  return amount <= 0 ? '—' : `R$ ${amount.toFixed(2).replace('.', ',')}`;
+};
+
+const sectionDefinitions = [
+  {
+    name: 'Populares perto de você',
+    sortFn: (a, b) => {
+      const popularityDiff = resolvePopularity(b) - resolvePopularity(a);
+      if (popularityDiff !== 0) return popularityDiff;
+      return resolveDateValue(b.updatedAt) - resolveDateValue(a.updatedAt);
+    },
+  },
+  {
+    name: 'Promoções / Frete grátis / Cupons',
+    filterFn: (item) => isPromotionalProduct(item),
+    sortFn: (a, b) => resolveDateValue(b.updatedAt) - resolveDateValue(a.updatedAt),
+  },
+  {
+    name: 'Bem avaliados',
+    sortFn: (a, b) => {
+      const ratingDiff = resolveRating(b) - resolveRating(a);
+      if (ratingDiff !== 0) return ratingDiff;
+      return resolveDateValue(b.updatedAt) - resolveDateValue(a.updatedAt);
+    },
+  },
+  {
+    name: 'Novos',
+    sortFn: (a, b) => resolveDateValue(b.createdAt) - resolveDateValue(a.createdAt),
+  },
+];
 
 export const HomePage = () => {
   const ctaVariantColor = getCtaVariantColor();
+  const [loadingProducts, setLoadingProducts] = useState(true);
+  const [allActiveProducts, setAllActiveProducts] = useState([]);
+
+  useEffect(() => {
+    let isMounted = true;
+
+    const loadProducts = async () => {
+      setLoadingProducts(true);
+
+      try {
+        const [storesSnapshot, activeStatusSnapshot, activeBooleanSnapshot] = await Promise.all([
+          getDocs(collection(db, 'lojas')),
+          getDocs(query(collectionGroup(db, 'produtos'), where('status', '==', 'Ativo'))),
+          getDocs(query(collectionGroup(db, 'produtos'), where('active', '==', true))),
+        ]);
+
+        if (!isMounted) return;
+
+        const storeNameById = new Map(
+          storesSnapshot.docs.map((storeDoc) => [storeDoc.id, (storeDoc.data() || {}).nome || storeDoc.id])
+        );
+
+        const uniqueProducts = new Map();
+        [...activeStatusSnapshot.docs, ...activeBooleanSnapshot.docs].forEach((docSnap) => {
+          const data = docSnap.data() || {};
+          if (!isProductActive(data)) return;
+          const storeId = data.lojaId || docSnap.ref.parent.parent?.id || '';
+          uniqueProducts.set(docSnap.ref.path, {
+            id: docSnap.id,
+            ...data,
+            lojaId: storeId,
+            lojaNome: storeNameById.get(storeId) || data.lojaNome || 'Loja',
+          });
+        });
+
+        setAllActiveProducts(Array.from(uniqueProducts.values()));
+      } catch (error) {
+        console.error('Erro ao carregar produtos ativos da Home:', error);
+        if (isMounted) setAllActiveProducts([]);
+      } finally {
+        if (isMounted) setLoadingProducts(false);
+      }
+    };
+
+    loadProducts();
+    return () => {
+      isMounted = false;
+    };
+  }, []);
+
+  const sectionCards = useMemo(() => {
+    return sectionDefinitions.map((section) => {
+      const filtered = section.filterFn
+        ? allActiveProducts.filter(section.filterFn)
+        : [...allActiveProducts];
+
+      const cards = filtered
+        .sort(section.sortFn)
+        .slice(0, 3)
+        .map((item) => ({
+          id: item.id,
+          name: item.nome || item.name || 'Produto',
+          rating: resolveRating(item),
+          eta: item.tempoEntrega || item.tempoEstimado || item.tempoPreparo || '—',
+          fee: formatCurrency(item.taxaEntrega ?? item.frete),
+          tag: getBadgeForSection(section.name, item),
+          price: formatCurrency(item.preco),
+          storeName: item.lojaNome || 'Loja',
+          href: item.publicPath || item.cardapioPath || null,
+        }));
+
+      return {
+        name: section.name,
+        cards,
+      };
+    });
+  }, [allActiveProducts]);
 
   return (
     <main className="home-page">
@@ -118,27 +261,45 @@ export const HomePage = () => {
         </div>
       </section>
 
-      {Object.entries(sectionCards).map(([sectionName, cards]) => (
+      {sectionCards.map(({ name: sectionName, cards }) => (
         <section key={sectionName} className="container-shell section-spacing">
           <div className="section-title-row">
             <h2>{sectionName}</h2>
           </div>
           <div className="cards-grid">
-            {cards.map((item) => (
-              <Card key={`${sectionName}-${item.name}`}>
-                <div className="card-top">
-                  <h3>{item.name}</h3>
-                  <Badge>{item.tag}</Badge>
-                </div>
+            {!loadingProducts && cards.length === 0 && (
+              <Card>
                 <div className="card-meta">
-                  <span>
-                    <Star size={14} aria-hidden="true" /> {item.rating}
-                  </span>
-                  <span>
-                    <Clock3 size={14} aria-hidden="true" /> {item.eta}
-                  </span>
-                  <span>{item.fee}</span>
+                  <span>{EMPTY_STATE_LABEL}</span>
                 </div>
+              </Card>
+            )}
+
+            {cards.map((item) => (
+              <Card key={`${sectionName}-${item.id || item.name}`}>
+                <button
+                  type="button"
+                  onClick={() => item.href && window.open(item.href, '_self')}
+                  className="w-full text-left"
+                >
+                  <div className="card-top">
+                    <h3>{item.name}</h3>
+                    {item.tag ? <Badge>{item.tag}</Badge> : null}
+                  </div>
+                  <p className="text-sm text-gray-500 mb-1">{item.storeName}</p>
+                  <p className="text-sm font-medium text-gray-700 mb-2">{item.price}</p>
+                  <div className="card-meta">
+                    {item.rating > 0 ? (
+                      <span>
+                        <Star size={14} aria-hidden="true" /> {item.rating.toFixed(1)}
+                      </span>
+                    ) : null}
+                    <span>
+                      <Clock3 size={14} aria-hidden="true" /> {item.eta}
+                    </span>
+                    <span>{item.fee}</span>
+                  </div>
+                </button>
               </Card>
             ))}
           </div>
