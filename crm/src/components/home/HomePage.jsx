@@ -99,7 +99,7 @@ const buildCatalogProduct = (docSnap, product = {}, storeNameById = new Map()) =
   };
 };
 
-const fetchActiveProductsCatalog = async (storeNameById) => {
+const fetchActiveProductsCatalog = async (storeNameById, storeIds = []) => {
   try {
     // IMPORTANTE:
     // Essa consulta exige índice Firestore:
@@ -115,12 +115,28 @@ const fetchActiveProductsCatalog = async (storeNameById) => {
       .filter((product) => isProductActive(product));
   } catch (err) {
     const errorMessage = String(err?.message || '').toLowerCase();
-    if (errorMessage.includes('requires an index')) {
+    const isIndexError =
+      err?.code === 'failed-precondition' &&
+      (errorMessage.includes('requires an index') || errorMessage.includes('collection_group_asc index'));
+
+    if (isIndexError) {
       console.warn(
-        "Índice Firestore necessário para collectionGroup('produtos'). Verifique: field status (ASC)."
+        "Índice Firestore necessário para collectionGroup('produtos'). Verifique: field status (ASC). Aplicando fallback por loja."
       );
-      console.error(err);
-      return [];
+
+      const snapshots = await Promise.all(
+        storeIds.map((storeId) =>
+          getDocs(query(collection(db, 'lojas', storeId, 'produtos'), where('status', '==', 'Ativo'), limit(20)))
+        )
+      );
+
+      const fallbackProducts = snapshots
+        .flatMap((snapshot) => snapshot.docs)
+        .map((docSnap) => buildCatalogProduct(docSnap, docSnap.data() || {}, storeNameById))
+        .filter((product) => isProductActive(product))
+        .slice(0, 50);
+
+      return fallbackProducts;
     }
 
     throw err;
@@ -235,11 +251,13 @@ export const HomePage = () => {
 
         if (!isMounted) return;
 
+        const storeDocs = storesSnapshot.docs;
         const storeNameById = new Map(
-          storesSnapshot.docs.map((storeDoc) => [storeDoc.id, (storeDoc.data() || {}).nome || storeDoc.id])
+          storeDocs.map((storeDoc) => [storeDoc.id, (storeDoc.data() || {}).nome || storeDoc.id])
         );
+        const storeIds = storeDocs.map((storeDoc) => storeDoc.id);
 
-        const activeProducts = await fetchActiveProductsCatalog(storeNameById);
+        const activeProducts = await fetchActiveProductsCatalog(storeNameById, storeIds);
 
         if (!isMounted) return;
 
