@@ -9,7 +9,7 @@ import {
 import { CTA_VARIANT } from '../../config/featureFlags';
 import { getCtaVariantColor, trackCtaClick } from '../../utils/ctaVariant';
 import { db } from '../../firebaseConfig';
-import { collection, collectionGroup, getDocs, limit, query, where } from 'firebase/firestore';
+import { collectionGroup, getDocs, limit, query, where } from 'firebase/firestore';
 import { Badge } from '../ui/Badge';
 import { Button } from '../ui/Button';
 import { Card } from '../ui/Card';
@@ -107,20 +107,33 @@ const buildCatalogProduct = (docSnap, product = {}, storeNameById = new Map()) =
   };
 };
 
-const fetchActiveProductsCatalog = async (storeNameById, storeIds = []) => {
+const queryActiveProducts = async (field, value) => {
+  const produtosRef = collectionGroup(db, 'produtos');
+  const q = query(produtosRef, where(field, '==', value), limit(50));
+  return getDocs(q);
+};
+
+const fetchActiveProductsCatalog = async () => {
   try {
     // IMPORTANTE:
     // Essa consulta exige índice Firestore:
     // collectionGroup: produtos
     // field: status (Ascending)
     // Criar no console: Firestore → Indexes → Add Index
-    const produtosRef = collectionGroup(db, 'produtos');
-    const q = query(produtosRef, where('status', '==', 'Ativo'), limit(50));
-    const snapshot = await getDocs(q);
+    const [statusSnapshot, activeSnapshot] = await Promise.all([
+      queryActiveProducts('status', 'Ativo'),
+      queryActiveProducts('active', true),
+    ]);
 
-    return snapshot.docs
-      .map((docSnap) => buildCatalogProduct(docSnap, docSnap.data() || {}, storeNameById))
-      .filter((product) => isProductActive(product));
+    const uniqueProducts = new Map();
+
+    [...statusSnapshot.docs, ...activeSnapshot.docs].forEach((docSnap) => {
+      const product = buildCatalogProduct(docSnap, docSnap.data() || {});
+      if (!isProductActive(product)) return;
+      uniqueProducts.set(`${product.lojaId || 'global'}-${docSnap.id}`, product);
+    });
+
+    return Array.from(uniqueProducts.values()).slice(0, 50);
   } catch (err) {
     const errorMessage = String(err?.message || '').toLowerCase();
     const isIndexError =
@@ -129,22 +142,10 @@ const fetchActiveProductsCatalog = async (storeNameById, storeIds = []) => {
 
     if (isIndexError) {
       console.warn(
-        "Índice Firestore necessário para collectionGroup('produtos'). Verifique: field status (ASC). Aplicando fallback por loja."
+        "Índice Firestore necessário para collectionGroup('produtos'). Verifique índices de status/active (ASC)."
       );
 
-      const snapshots = await Promise.all(
-        storeIds.map((storeId) =>
-          getDocs(query(collection(db, 'lojas', storeId, 'produtos'), where('status', '==', 'Ativo'), limit(20)))
-        )
-      );
-
-      const fallbackProducts = snapshots
-        .flatMap((snapshot) => snapshot.docs)
-        .map((docSnap) => buildCatalogProduct(docSnap, docSnap.data() || {}, storeNameById))
-        .filter((product) => isProductActive(product))
-        .slice(0, 50);
-
-      return fallbackProducts;
+      return [];
     }
 
     throw err;
@@ -255,17 +256,7 @@ export const HomePage = () => {
       setLoadingProducts(true);
 
       try {
-        const storesSnapshot = await getDocs(collection(db, 'lojas'));
-
-        if (!isMounted) return;
-
-        const storeDocs = storesSnapshot.docs;
-        const storeNameById = new Map(
-          storeDocs.map((storeDoc) => [storeDoc.id, (storeDoc.data() || {}).nome || storeDoc.id])
-        );
-        const storeIds = storeDocs.map((storeDoc) => storeDoc.id);
-
-        const activeProducts = await fetchActiveProductsCatalog(storeNameById, storeIds);
+        const activeProducts = await fetchActiveProductsCatalog();
 
         if (!isMounted) return;
 
