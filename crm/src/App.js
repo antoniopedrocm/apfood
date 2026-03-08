@@ -5905,14 +5905,21 @@ const effectiveStoreName = useMemo(() => {
     }, [activeTab, effectiveStoreId, user]);
     
     // States para Configuração de Frete
-    const [freteConfig, setFreteConfig] = useState({ enderecoLoja: '', lat: '', lng: '', valorPorKm: '' });
+    const defaultFreteConfig = { enderecoLoja: '', lat: '', lng: '', valorPorKm: '', valorMinimoFrete: '' };
+    const [freteConfig, setFreteConfig] = useState(defaultFreteConfig);
     const [isSavingFrete, setIsSavingFrete] = useState(false);
+
+    const normalizeDecimalInput = (value) => String(value ?? '').replace(',', '.').trim();
+    const parseNonNegativeNumber = (value) => {
+        const parsedValue = parseFloat(normalizeDecimalInput(value));
+        return Number.isFinite(parsedValue) && parsedValue >= 0 ? parsedValue : 0;
+    };
 
     useEffect(() => {
         if (activeTab !== 'frete') return;
 
         if (!effectiveStoreId) {
-            setFreteConfig({ enderecoLoja: '', lat: '', lng: '', valorPorKm: '' });
+            setFreteConfig(defaultFreteConfig);
             return;
         }
 
@@ -5926,7 +5933,7 @@ const effectiveStoreName = useMemo(() => {
                     const freteData = configData.frete || configData;
 
                     if (freteData && Object.keys(freteData).length) {
-                        setFreteConfig(freteData);
+                        setFreteConfig({ ...defaultFreteConfig, ...freteData });
                         return;
                     }
                 }
@@ -5935,7 +5942,7 @@ const effectiveStoreName = useMemo(() => {
                 const legacyFreteSnap = await getDoc(legacyFreteRef);
                 if (legacyFreteSnap.exists()) {
                     const freteData = legacyFreteSnap.data();
-                    setFreteConfig(freteData || { enderecoLoja: '', lat: '', lng: '', valorPorKm: '' });
+                    setFreteConfig({ ...defaultFreteConfig, ...(freteData || {}) });
                     await setDoc(configRef, { frete: freteData || {} }, { merge: true });
                     return;
                 }
@@ -5945,13 +5952,13 @@ const effectiveStoreName = useMemo(() => {
                     const infoData = legacyInfoSnap.data();
                     const freteData = infoData?.frete || {};
                     if (Object.keys(freteData).length) {
-                        setFreteConfig(freteData);
+                        setFreteConfig({ ...defaultFreteConfig, ...freteData });
                         await setDoc(configRef, { frete: freteData }, { merge: true });
                         return;
                     }
                 }
 
-                setFreteConfig({ enderecoLoja: '', lat: '', lng: '', valorPorKm: '' });
+                setFreteConfig(defaultFreteConfig);
             } catch (error) {
                 console.error("Erro ao buscar configurações de frete:", error);
             }
@@ -6293,29 +6300,36 @@ const effectiveStoreName = useMemo(() => {
                 return;
             }
 
+            const valorPorKm = parseNonNegativeNumber(freteConfig.valorPorKm);
+            const valorMinimoFrete = parseNonNegativeNumber(freteConfig.valorMinimoFrete);
+
+            const sanitizedFreteConfig = {
+                ...freteConfig,
+                valorPorKm,
+                valorMinimoFrete,
+            };
+
             const freteDoc = getStoreConfigDocRef(effectiveStoreId);
             await setDoc(freteDoc, {
                 frete: {
-                    ...freteConfig,
-                    valorPorKm: parseFloat(freteConfig.valorPorKm || 0),
+                    ...sanitizedFreteConfig,
                     updatedAt: new Date(),
                     updatedBy: user?.auth?.email || 'Sistema'
                 }
             }, { merge: true });
             await setDoc(doc(db, 'lojas', effectiveStoreId, 'info', 'dados'), {
                 frete: {
-                    ...freteConfig,
-                    valorPorKm: parseFloat(freteConfig.valorPorKm || 0),
+                    ...sanitizedFreteConfig,
                     updatedAt: new Date(),
                     updatedBy: user?.auth?.email || 'Sistema'
                 }
             }, { merge: true });
             await setDoc(doc(db, 'lojas', effectiveStoreId, 'configuracoes', 'frete'), {
-                ...freteConfig,
-                valorPorKm: parseFloat(freteConfig.valorPorKm || 0),
+                ...sanitizedFreteConfig,
                 updatedAt: new Date(),
                 updatedBy: user?.auth?.email || 'Sistema'
             }, { merge: true });
+            setFreteConfig((prev) => ({ ...prev, valorPorKm, valorMinimoFrete }));
             alert('Configurações de frete salvas com sucesso!');
         } catch (error) {
             console.error("Erro ao salvar frete:", error);
@@ -6802,12 +6816,22 @@ const effectiveStoreName = useMemo(() => {
                             <Input
                                 label="Valor por KM (R$)"
                                 type="number"
+                                min="0"
                                 step="0.01"
                                 placeholder="Ex: 1.50"
                                 value={freteConfig.valorPorKm || ''}
-                                onChange={e => setFreteConfig({ ...freteConfig, valorPorKm: e.target.value })}
+                                onChange={e => setFreteConfig({ ...freteConfig, valorPorKm: e.target.value.replace(',', '.') })}
                                 required
-                        />
+                            />
+                            <Input
+                                label="Valor mínimo do frete (R$)"
+                                type="number"
+                                min="0"
+                                step="0.01"
+                                placeholder="Ex: 5.00"
+                                value={freteConfig.valorMinimoFrete ?? ''}
+                                onChange={e => setFreteConfig({ ...freteConfig, valorMinimoFrete: e.target.value.replace(',', '.') })}
+                            />
                         <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
                             <Input 
                                 label="Latitude da Loja" 
