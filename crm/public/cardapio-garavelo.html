@@ -2622,6 +2622,7 @@
 				lng: parseFloat(window.dadosFrete.lng)
 			};
 			const valorPorKm = parseFloat(window.dadosFrete.valorPorKm);
+			const valorMinimoFrete = parseFloat(String(window.dadosFrete.valorMinimoFrete ?? 0).replace(',', '.'));
 			
 			const service = new google.maps.DistanceMatrixService();
 			service.getDistanceMatrix({
@@ -2637,15 +2638,13 @@
 				
 				const element = response.rows[0].elements[0];
 				const distanceKm = element.distance.value / 1000;
-				let valorFreteCalculado = distanceKm * valorPorKm;
-
-				if (valorFreteCalculado < 2) {
-					valorFreteCalculado = 2.00;
-				}
+				const valorFreteCalculado = distanceKm * valorPorKm;
+				const minimoFreteAplicado = Number.isFinite(valorMinimoFrete) && valorMinimoFrete >= 0 ? valorMinimoFrete : 0;
+				const valorFreteFinal = Math.max(valorFreteCalculado, minimoFreteAplicado);
 
 				resolve({
 					distanciaKm: distanceKm.toFixed(2),
-					valorFrete: valorFreteCalculado.toFixed(2)
+					valorFrete: valorFreteFinal.toFixed(2)
 				});
 			});
 		});

@@ -648,20 +648,23 @@ app.post("/frete/calcular", async (req, res) => {
       return res.status(404).json({message: "Configuração de frete não encontrada."});
     }
 
-    const lojaLat = freteConfig.lat;
-    const lojaLng = freteConfig.lng;
-    const valorPorKm = freteConfig.valorPorKm;
+    const lojaLat = Number(freteConfig.lat);
+    const lojaLng = Number(freteConfig.lng);
+    const valorPorKm = Number(freteConfig.valorPorKm);
+    const valorMinimoFrete = Number(freteConfig.valorMinimoFrete ?? 0);
 
-    if (typeof lojaLat !== "number" || typeof lojaLng !== "number"
-      || typeof valorPorKm !== "number") {
+    if (!Number.isFinite(lojaLat) || !Number.isFinite(lojaLng)
+      || !Number.isFinite(valorPorKm)) {
       return res.status(400).json({message: "Configuração de frete inválida."});
     }
 
+    const minimoFreteAplicado = Number.isFinite(valorMinimoFrete) && valorMinimoFrete >= 0 ? valorMinimoFrete : 0;
     const distanciaKm = getDistance(lojaLat, lojaLng, clienteLat, clienteLng);
-    const valorFrete = distanciaKm * valorPorKm;
+    const valorFreteCalculado = distanciaKm * valorPorKm;
+    const valorFreteFinal = Math.max(valorFreteCalculado, minimoFreteAplicado);
 
     res.status(200).json({
-      valorFrete: parseFloat(valorFrete.toFixed(2)),
+      valorFrete: parseFloat(valorFreteFinal.toFixed(2)),
       distanciaKm: distanciaKm.toFixed(2),
     });
   } catch (error) {
