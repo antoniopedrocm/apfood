@@ -3,7 +3,7 @@
 // the configured services without duplicating boilerplate.
 
 import { initializeApp, getApps } from 'firebase/app';
-import { getAnalytics } from 'firebase/analytics';
+import { getAnalytics, isSupported as analyticsIsSupported } from 'firebase/analytics';
 import { getFirestore } from 'firebase/firestore';
 import { getAuth } from 'firebase/auth';
 import { getStorage } from 'firebase/storage';
@@ -77,10 +77,25 @@ const app = getApps().length ? getApps()[0] : initializeApp(firebaseConfig);
 
 // Optionally enable Google Analytics (only works in browsers).  When
 // running in Node or during SSR the analytics import will be unused.
-let analytics;
-if (typeof window !== 'undefined') {
-  analytics = getAnalytics(app);
-}
+let analytics = null;
+
+const initializeAnalytics = async () => {
+  if (typeof window === 'undefined') return null;
+
+  try {
+    const supported = await analyticsIsSupported();
+    if (!supported) return null;
+    return getAnalytics(app);
+  } catch (error) {
+    console.warn('[firebaseConfig] Analytics indisponível no contexto atual:', error);
+    return null;
+  }
+};
+
+const analyticsPromise = initializeAnalytics().then((instance) => {
+  analytics = instance;
+  return instance;
+});
 
 // --- Exported Firebase services ---
 // Firestore for data storage, Auth for authentication, Storage for
@@ -91,35 +106,36 @@ export const storage = getStorage(app);
 export const functions = getFunctions(app);
 
 // Expose the underlying app and analytics for advanced use cases.
-export { app, analytics };
+export { app, analytics, analyticsPromise };
 
 // --- FCM / Notifications ---
-// messagingPromise lazily initialises the Messaging service only if
-// the browser supports it and the user grants permission for
-// notifications.  Code that requires messaging should await this
-// promise.
-export const messagingPromise = (async () => {
-  if (typeof window === 'undefined') return null;
-  try {
-    const supported = await messagingIsSupported();
-    if (!supported) return null;
-    const messaging = getMessaging(app);
-    if (!VAPID_KEY) {
-      return messaging;
-    }
-    // Request permission to send notifications.  This must be
-    // triggered from a user gesture in most browsers; failure to
-    // request here will cause the promise to reject.
-    const permission = await Notification.requestPermission();
-    if (permission !== 'granted') {
-      console.warn('🔔 Notification permission not granted');
-      return messaging;
-    }
+// Messaging inicializa somente sob demanda para evitar dependências
+// no carregamento público da Home.
+let messagingInitPromise = null;
 
-    await getToken(messaging, { vapidKey: VAPID_KEY });
-    return messaging;
-  } catch (err) {
-    console.error('Failed to initialise Firebase Messaging:', err);
-    return null;
-  }
-})();
+export const getMessagingInstance = async () => {
+  if (messagingInitPromise) return messagingInitPromise;
+
+  messagingInitPromise = (async () => {
+    if (typeof window === 'undefined') return null;
+    try {
+      const supported = await messagingIsSupported();
+      if (!supported) return null;
+      return getMessaging(app);
+    } catch (err) {
+      console.error('Failed to initialise Firebase Messaging:', err);
+      return null;
+    }
+  })();
+
+  return messagingInitPromise;
+};
+
+export const requestMessagingToken = async (messaging, serviceWorkerRegistration) => {
+  if (!messaging || !VAPID_KEY) return null;
+
+  return getToken(messaging, {
+    vapidKey: VAPID_KEY,
+    serviceWorkerRegistration,
+  });
+};

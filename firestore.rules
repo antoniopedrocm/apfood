@@ -98,7 +98,7 @@ service cloud.firestore {
 
     // --- Regras legadas já existentes no projeto ---
     match /produtos/{produtoId} {
-      allow read: if isPublicProduct();
+      allow get, list: if isPublicProduct();
       allow write: if request.auth != null;
     }
 
@@ -131,7 +131,7 @@ service cloud.firestore {
         && request.resource.data.branding.keys().hasOnly(['logoUrl', 'logoPath', 'updatedAt', 'updatedBy']);
 
       match /produtos/{produtoId} {
-        allow read: if isPublicProduct();
+        allow get, list: if isPublicProduct();
         allow write: if request.auth != null;
       }
 

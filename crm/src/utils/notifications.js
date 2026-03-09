@@ -1,6 +1,11 @@
-import { getToken, onMessage } from "firebase/messaging";
+import { onMessage } from "firebase/messaging";
 import { doc, serverTimestamp, setDoc } from "firebase/firestore";
-import { db, messagingPromise, VAPID_KEY } from "../firebaseConfig.js";
+import {
+  db,
+  getMessagingInstance,
+  requestMessagingToken,
+  VAPID_KEY,
+} from "../firebaseConfig.js";
 const isBrowser = typeof window !== "undefined";
 const runtimeEnv =
   (typeof process !== "undefined" && process.env && process.env.NODE_ENV) ||
@@ -42,7 +47,7 @@ async function ensureServiceWorkerRegistration() {
 export async function registerDeviceForPush(uid) {
   if (!isBrowser) return null;
 
-  const messaging = await messagingPromise;
+  const messaging = await getMessagingInstance();
   if (!messaging) return null;
 
   if (!("Notification" in window)) {
@@ -71,10 +76,7 @@ export async function registerDeviceForPush(uid) {
 
   try {
     const registration = await ensureServiceWorkerRegistration();
-    const token = await getToken(messaging, {
-      vapidKey: VAPID_KEY,
-      serviceWorkerRegistration: registration,
-    });
+    const token = await requestMessagingToken(messaging, registration);
 
     if (!token) {
       console.warn("Não foi possível obter o token de push.");
@@ -102,7 +104,7 @@ export async function registerDeviceForPush(uid) {
 export async function listenForForegroundMessages(callback) {
   if (!isBrowser) return () => {};
 
-  const messaging = await messagingPromise;
+  const messaging = await getMessagingInstance();
   if (!messaging) return () => {};
 
   return onMessage(messaging, callback);

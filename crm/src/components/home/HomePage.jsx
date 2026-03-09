@@ -113,6 +113,23 @@ const queryActiveProducts = async (field, value) => {
   return getDocs(q);
 };
 
+const isPermissionError = (err) => {
+  const errorMessage = String(err?.message || '').toLowerCase();
+  return (
+    err?.code === 'permission-denied' ||
+    errorMessage.includes('missing or insufficient permissions')
+  );
+};
+
+const isInstallationsError = (err) => {
+  const errorMessage = String(err?.message || '').toLowerCase();
+  return (
+    err?.code === 'installations/request-failed' ||
+    errorMessage.includes('installations') ||
+    errorMessage.includes('permission_denied: the caller does not have permission')
+  );
+};
+
 const isMissingIndexError = (err) => {
   const errorMessage = String(err?.message || '').toLowerCase();
   return (
@@ -147,7 +164,18 @@ const mergeAndNormalizeProducts = (products = []) => {
 };
 
 const fetchActiveProductsCatalogFallback = async () => {
-  const storesSnapshot = await getDocs(collection(db, 'lojas'));
+  let storesSnapshot;
+
+  try {
+    storesSnapshot = await getDocs(collection(db, 'lojas'));
+  } catch (error) {
+    if (isPermissionError(error)) {
+      console.warn('[Home] Sem permissão para listar lojas no fallback público.');
+      return [];
+    }
+
+    throw error;
+  }
   const storeNameById = new Map();
 
   storesSnapshot.docs.forEach((storeDoc) => {
@@ -187,8 +215,13 @@ const fetchActiveProductsCatalog = async () => {
 
     return mergeAndNormalizeProducts(mergedProducts);
   } catch (err) {
-    if (isMissingIndexError(err)) {
-      console.warn("Firestore index missing, using fallback query");
+    if (isMissingIndexError(err) || isPermissionError(err)) {
+      console.warn('[Home] collectionGroup indisponível, usando fallback por loja.');
+      return fetchActiveProductsCatalogFallback();
+    }
+
+    if (isInstallationsError(err)) {
+      console.warn('[Home] Erro de Firebase Installations detectado; vitrine seguirá sem bloqueio.');
       return fetchActiveProductsCatalogFallback();
     }
 
