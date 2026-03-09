@@ -134,8 +134,25 @@ export const getMessagingInstance = async () => {
 export const requestMessagingToken = async (messaging, serviceWorkerRegistration) => {
   if (!messaging || !VAPID_KEY) return null;
 
-  return getToken(messaging, {
-    vapidKey: VAPID_KEY,
-    serviceWorkerRegistration,
-  });
+  try {
+    return await getToken(messaging, {
+      vapidKey: VAPID_KEY,
+      serviceWorkerRegistration,
+    });
+  } catch (error) {
+    const normalizedMessage = String(error?.message || '').toLowerCase();
+    const isInstallationsPermissionError =
+      error?.code === 'installations/request-failed' ||
+      normalizedMessage.includes('firebaseinstallations.googleapis.com') ||
+      normalizedMessage.includes('permission_denied');
+
+    if (isInstallationsPermissionError) {
+      console.warn(
+        '[firebaseConfig] Push desativado neste ambiente (sem permissão para Firebase Installations).'
+      );
+      return null;
+    }
+
+    throw error;
+  }
 };

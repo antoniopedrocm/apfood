@@ -139,17 +139,6 @@ const isMissingIndexError = (err) => {
   );
 };
 
-const resolveStoreName = (store = {}, fallbackId = '') => {
-  return (
-    store.nome ||
-    store.name ||
-    store.razaoSocial ||
-    store.fantasia ||
-    fallbackId ||
-    'Loja'
-  );
-};
-
 const mergeAndNormalizeProducts = (products = []) => {
   const uniqueProducts = new Map();
 
@@ -164,36 +153,26 @@ const mergeAndNormalizeProducts = (products = []) => {
 };
 
 const fetchActiveProductsCatalogFallback = async () => {
-  let storesSnapshot;
-
   try {
-    storesSnapshot = await getDocs(collection(db, 'lojas'));
+    const [statusSnapshot, activeSnapshot] = await Promise.all([
+      getDocs(query(collection(db, 'produtos'), where('status', '==', 'Ativo'), limit(50))),
+      getDocs(query(collection(db, 'produtos'), where('active', '==', true), limit(50))),
+    ]);
+
+    const mergedProducts = [...statusSnapshot.docs, ...activeSnapshot.docs].map((docSnap) => {
+      const product = docSnap.data() || {};
+      return buildCatalogProduct(docSnap, product);
+    });
+
+    return mergeAndNormalizeProducts(mergedProducts);
   } catch (error) {
     if (isPermissionError(error)) {
-      console.warn('[Home] Sem permissão para listar lojas no fallback público.');
+      console.warn('[Home] Sem permissão para fallback público de produtos.');
       return [];
     }
 
     throw error;
   }
-  const storeNameById = new Map();
-
-  storesSnapshot.docs.forEach((storeDoc) => {
-    storeNameById.set(storeDoc.id, resolveStoreName(storeDoc.data() || {}, storeDoc.id));
-  });
-
-  const productSnapshots = await Promise.all(
-    storesSnapshot.docs.map((storeDoc) => getDocs(collection(db, 'lojas', storeDoc.id, 'produtos')))
-  );
-
-  const mergedProducts = productSnapshots.flatMap((snapshot) =>
-    snapshot.docs.map((docSnap) => {
-      const product = docSnap.data() || {};
-      return buildCatalogProduct(docSnap, product, storeNameById);
-    })
-  );
-
-  return mergeAndNormalizeProducts(mergedProducts);
 };
 
 const fetchActiveProductsCatalog = async () => {
@@ -216,7 +195,7 @@ const fetchActiveProductsCatalog = async () => {
     return mergeAndNormalizeProducts(mergedProducts);
   } catch (err) {
     if (isMissingIndexError(err) || isPermissionError(err)) {
-      console.warn('[Home] collectionGroup indisponível, usando fallback por loja.');
+      console.warn('[Home] collectionGroup indisponível, usando fallback público de produtos.');
       return fetchActiveProductsCatalogFallback();
     }
 
