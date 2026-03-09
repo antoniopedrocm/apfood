@@ -33,10 +33,10 @@ const firebaseConfig = {
   storageBucket:
     envVar('REACT_APP_FIREBASE_STORAGE_BUCKET') || 'apfood-e9627.firebasestorage.app',
   messagingSenderId:
-    envVar('REACT_APP_FIREBASE_MESSAGING_SENDER_ID') || '847824537421',
+    envVar('REACT_APP_FIREBASE_MESSAGING_SENDER_ID') || '516899771627',
   appId:
     envVar('REACT_APP_FIREBASE_APP_ID') ||
-    '1:847824537421:web:75861057fd6f998ee49904',
+    '1:516899771627:web:REPLACE_WITH_YOUR_WEB_APP_ID',
   measurementId: envVar('REACT_APP_FIREBASE_MEASUREMENT_ID') || 'G-F8BVTNLEW7',
 };
 
