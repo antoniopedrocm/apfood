@@ -11,7 +11,7 @@ service cloud.firestore {
     // PERMITE que qualquer visitante leia a lista de produtos.
     // APENAS usuários autenticados (funcionários no CRM) podem criar, alterar ou deletar produtos.
     match /produtos/{produtoId} {
-      allow read: if isPublicProduct();
+      allow get, list: if isPublicProduct();
       allow write: if request.auth != null;
     }
 
@@ -50,7 +50,7 @@ service cloud.firestore {
     // --- REGRAS PARA LOJAS (MULTILOJAS) ---
     match /lojas/{lojaId} {
       match /produtos/{produtoId} {
-        allow read: if isPublicProduct();
+        allow get, list: if isPublicProduct();
         allow write: if request.auth != null;
       }
 
