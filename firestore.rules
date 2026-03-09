@@ -30,6 +30,11 @@ service cloud.firestore {
         );
     }
 
+    function isPlatformAdmin() {
+      return isAuthenticated()
+        && (getUserDoc().data.role in ['ADMIN', 'admin']);
+    }
+
     function isPublicProduct() {
       return resource.data.status == 'Ativo' || resource.data.active == true;
     }
@@ -99,7 +104,7 @@ service cloud.firestore {
     // --- Regras legadas já existentes no projeto ---
     match /produtos/{produtoId} {
       allow get, list: if isPublicProduct();
-      allow write: if request.auth != null;
+      allow write: if isPlatformAdmin();
     }
 
     match /configuracoes/{docId} {
@@ -132,7 +137,7 @@ service cloud.firestore {
 
       match /produtos/{produtoId} {
         allow get, list: if isPublicProduct();
-        allow write: if request.auth != null;
+        allow write: if isOwnerOrManagerForLoja(lojaId) || isPlatformAdmin();
       }
 
       match /configuracoes/{docId} {

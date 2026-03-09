@@ -107,12 +107,6 @@ const buildCatalogProduct = (docSnap, product = {}, storeNameById = new Map()) =
   };
 };
 
-const queryActiveProducts = async (field, value) => {
-  const produtosRef = collectionGroup(db, 'produtos');
-  const q = query(produtosRef, where(field, '==', value), limit(50));
-  return getDocs(q);
-};
-
 const isPermissionError = (err) => {
   const errorMessage = String(err?.message || '').toLowerCase();
   return (
@@ -139,6 +133,20 @@ const isMissingIndexError = (err) => {
   );
 };
 
+const logHomeCatalogFallbackReason = (error, contextLabel) => {
+  if (isMissingIndexError(error) || isPermissionError(error)) {
+    console.warn(`[Home] ${contextLabel} indisponível, tentando próxima estratégia.`);
+    return;
+  }
+
+  if (isInstallationsError(error)) {
+    console.warn('[Home] Erro de Firebase Installations detectado; vitrine seguirá sem bloqueio.');
+    return;
+  }
+
+  console.warn(`[Home] Falha na consulta ${contextLabel}:`, error);
+};
+
 const mergeAndNormalizeProducts = (products = []) => {
   const uniqueProducts = new Map();
 
@@ -152,60 +160,57 @@ const mergeAndNormalizeProducts = (products = []) => {
     .slice(0, 50);
 };
 
-const fetchActiveProductsCatalogFallback = async () => {
+const fetchProductsByField = async ({ sourceLabel, sourceRefFactory, field, value }) => {
   try {
-    const [statusSnapshot, activeSnapshot] = await Promise.all([
-      getDocs(query(collection(db, 'produtos'), where('status', '==', 'Ativo'), limit(50))),
-      getDocs(query(collection(db, 'produtos'), where('active', '==', true), limit(50))),
-    ]);
+    const sourceRef = sourceRefFactory();
+    const snapshot = await getDocs(query(sourceRef, where(field, '==', value), limit(50)));
 
-    const mergedProducts = [...statusSnapshot.docs, ...activeSnapshot.docs].map((docSnap) => {
-      const product = docSnap.data() || {};
-      return buildCatalogProduct(docSnap, product);
-    });
-
-    return mergeAndNormalizeProducts(mergedProducts);
+    return snapshot.docs.map((docSnap) => buildCatalogProduct(docSnap, docSnap.data() || {}));
   } catch (error) {
-    if (isPermissionError(error)) {
-      console.warn('[Home] Sem permissão para fallback público de produtos.');
-      return [];
-    }
-
-    throw error;
+    logHomeCatalogFallbackReason(error, sourceLabel);
+    return [];
   }
 };
 
 const fetchActiveProductsCatalog = async () => {
-  try {
-    // IMPORTANTE:
-    // Essa consulta exige índice Firestore:
-    // collectionGroup: produtos
-    // field: status (Ascending)
-    // Criar no console: Firestore → Indexes → Add Index
-    const [statusSnapshot, activeSnapshot] = await Promise.all([
-      queryActiveProducts('status', 'Ativo'),
-      queryActiveProducts('active', true),
-    ]);
+  const queryPlans = [
+    {
+      sourceLabel: 'collectionGroup(produtos)/status',
+      sourceRefFactory: () => collectionGroup(db, 'produtos'),
+      field: 'status',
+      value: 'Ativo',
+    },
+    {
+      sourceLabel: 'collectionGroup(produtos)/active',
+      sourceRefFactory: () => collectionGroup(db, 'produtos'),
+      field: 'active',
+      value: true,
+    },
+    {
+      sourceLabel: 'root(produtos)/status',
+      sourceRefFactory: () => collection(db, 'produtos'),
+      field: 'status',
+      value: 'Ativo',
+    },
+    {
+      sourceLabel: 'root(produtos)/active',
+      sourceRefFactory: () => collection(db, 'produtos'),
+      field: 'active',
+      value: true,
+    },
+  ];
 
-    const mergedProducts = [...statusSnapshot.docs, ...activeSnapshot.docs].map((docSnap) => {
-      const product = buildCatalogProduct(docSnap, docSnap.data() || {});
-      return product;
-    });
+  const settledResults = await Promise.allSettled(
+    queryPlans.map((plan) => fetchProductsByField(plan))
+  );
 
-    return mergeAndNormalizeProducts(mergedProducts);
-  } catch (err) {
-    if (isMissingIndexError(err) || isPermissionError(err)) {
-      console.warn('[Home] collectionGroup indisponível, usando fallback público de produtos.');
-      return fetchActiveProductsCatalogFallback();
-    }
+  const collectedProducts = settledResults.flatMap((result) => {
+    if (result.status === 'fulfilled') return result.value;
+    console.warn('[Home] Estratégia de carregamento não concluída:', result.reason);
+    return [];
+  });
 
-    if (isInstallationsError(err)) {
-      console.warn('[Home] Erro de Firebase Installations detectado; vitrine seguirá sem bloqueio.');
-      return fetchActiveProductsCatalogFallback();
-    }
-
-    throw err;
-  }
+  return mergeAndNormalizeProducts(collectedProducts);
 };
 
 const resolveDateValue = (value) => {
