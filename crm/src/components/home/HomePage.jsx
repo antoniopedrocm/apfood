@@ -9,7 +9,7 @@ import {
 import { CTA_VARIANT } from '../../config/featureFlags';
 import { getCtaVariantColor, trackCtaClick } from '../../utils/ctaVariant';
 import { db } from '../../firebaseConfig';
-import { collectionGroup, getDocs, limit, query, where } from 'firebase/firestore';
+import { collection, collectionGroup, getDocs, limit, query, where } from 'firebase/firestore';
 import { Badge } from '../ui/Badge';
 import { Button } from '../ui/Button';
 import { Card } from '../ui/Card';
@@ -113,6 +113,61 @@ const queryActiveProducts = async (field, value) => {
   return getDocs(q);
 };
 
+const isMissingIndexError = (err) => {
+  const errorMessage = String(err?.message || '').toLowerCase();
+  return (
+    err?.code === 'failed-precondition' ||
+    errorMessage.includes('requires an index') ||
+    errorMessage.includes('collection_group_asc index')
+  );
+};
+
+const resolveStoreName = (store = {}, fallbackId = '') => {
+  return (
+    store.nome ||
+    store.name ||
+    store.razaoSocial ||
+    store.fantasia ||
+    fallbackId ||
+    'Loja'
+  );
+};
+
+const mergeAndNormalizeProducts = (products = []) => {
+  const uniqueProducts = new Map();
+
+  products.forEach((product) => {
+    if (!product?.id || !isProductActive(product)) return;
+    uniqueProducts.set(product.id, product);
+  });
+
+  return Array.from(uniqueProducts.values())
+    .sort((a, b) => resolveDateValue(b.updatedAt) - resolveDateValue(a.updatedAt))
+    .slice(0, 50);
+};
+
+const fetchActiveProductsCatalogFallback = async () => {
+  const storesSnapshot = await getDocs(collection(db, 'lojas'));
+  const storeNameById = new Map();
+
+  storesSnapshot.docs.forEach((storeDoc) => {
+    storeNameById.set(storeDoc.id, resolveStoreName(storeDoc.data() || {}, storeDoc.id));
+  });
+
+  const productSnapshots = await Promise.all(
+    storesSnapshot.docs.map((storeDoc) => getDocs(collection(db, 'lojas', storeDoc.id, 'produtos')))
+  );
+
+  const mergedProducts = productSnapshots.flatMap((snapshot) =>
+    snapshot.docs.map((docSnap) => {
+      const product = docSnap.data() || {};
+      return buildCatalogProduct(docSnap, product, storeNameById);
+    })
+  );
+
+  return mergeAndNormalizeProducts(mergedProducts);
+};
+
 const fetchActiveProductsCatalog = async () => {
   try {
     // IMPORTANTE:
@@ -125,27 +180,16 @@ const fetchActiveProductsCatalog = async () => {
       queryActiveProducts('active', true),
     ]);
 
-    const uniqueProducts = new Map();
-
-    [...statusSnapshot.docs, ...activeSnapshot.docs].forEach((docSnap) => {
+    const mergedProducts = [...statusSnapshot.docs, ...activeSnapshot.docs].map((docSnap) => {
       const product = buildCatalogProduct(docSnap, docSnap.data() || {});
-      if (!isProductActive(product)) return;
-      uniqueProducts.set(`${product.lojaId || 'global'}-${docSnap.id}`, product);
+      return product;
     });
 
-    return Array.from(uniqueProducts.values()).slice(0, 50);
+    return mergeAndNormalizeProducts(mergedProducts);
   } catch (err) {
-    const errorMessage = String(err?.message || '').toLowerCase();
-    const isIndexError =
-      err?.code === 'failed-precondition' &&
-      (errorMessage.includes('requires an index') || errorMessage.includes('collection_group_asc index'));
-
-    if (isIndexError) {
-      console.warn(
-        "Índice Firestore necessário para collectionGroup('produtos'). Verifique índices de status/active (ASC)."
-      );
-
-      return [];
+    if (isMissingIndexError(err)) {
+      console.warn("Firestore index missing, using fallback query");
+      return fetchActiveProductsCatalogFallback();
     }
 
     throw err;
