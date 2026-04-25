@@ -59,7 +59,7 @@ class AudioManager {
     }
   }
 
-  async init() {
+  async init({ allowAutoCreate = false } = {}) {
     if (this.audioCtx && this.audioCtx.state !== "closed") {
       if (this.audioCtx.state === "suspended") {
         try {
@@ -74,6 +74,10 @@ class AudioManager {
       } else {
         this.unlocked = true;
       }
+      return;
+    }
+
+    if (!allowAutoCreate) {
       return;
     }
 
@@ -151,7 +155,7 @@ async _ensureNativePreload() {
   
   async userUnlock({ userGesture = false } = {}) {
     if (!this.audioCtx || this.audioCtx.state === "closed") {
-      await this.init();
+      await this.init({ allowAutoCreate: true });
       if (!this.audioCtx) return;
     }
 
@@ -250,7 +254,12 @@ async _ensureNativePreload() {
   }
 
   async playSound(url, { loop = false, volume = 1 } = {}) {
-    await this.init();
+    if (!this.unlocked) {
+      this.pendingPlay = true;
+      return null;
+    }
+
+    await this.init({ allowAutoCreate: true });
 
     // --- Suporte a Capacitor (Android/iOS) ---
     if (Capacitor.isNativePlatform() && (Capacitor.getPlatform() === 'android' || Capacitor.getPlatform() === 'ios')) {

@@ -12,6 +12,7 @@ const runtimeEnv =
   import.meta.env?.MODE ||
   "";
 const isDev = runtimeEnv !== "production";
+let hasLoggedMissingVapidWarning = false;
 
 async function ensureServiceWorkerRegistration() {
   if (!isBrowser || !('serviceWorker' in navigator)) {
@@ -66,7 +67,8 @@ export async function registerDeviceForPush(uid) {
   }
 
   if (!VAPID_KEY) {
-    if (isDev) {
+    if (isDev && !hasLoggedMissingVapidWarning) {
+      hasLoggedMissingVapidWarning = true;
       console.warn(
         "A variável de ambiente da chave VAPID não está configurada; notificações push permanecerão desativadas."
       );
@@ -79,7 +81,9 @@ export async function registerDeviceForPush(uid) {
     const token = await requestMessagingToken(messaging, registration);
 
     if (!token) {
-      console.warn("Não foi possível obter o token de push.");
+      if (isDev) {
+        console.info("Push token indisponível neste ambiente; seguindo sem notificações.");
+      }
       return null;
     }
 
