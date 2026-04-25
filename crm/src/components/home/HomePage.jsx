@@ -59,6 +59,7 @@ const copyOptions = [
 const quickCategories = ['Pizza', 'Hambúrguer', 'Japonês', 'Mercado', 'Sobremesa', 'Bebidas'];
 
 const EMPTY_STATE_LABEL = 'Nenhum produto ativo disponível no momento';
+const DEFAULT_REGION_LABEL = 'Goiânia e região';
 const PRODUCT_PLACEHOLDER_IMAGE = '/images/product-placeholder.png';
 
 const buildCatalogProduct = (docSnap, product = {}, storeNameById = new Map()) => {
@@ -173,6 +174,25 @@ const fetchProductsByField = async ({ sourceLabel, sourceRefFactory, field, valu
 };
 
 const fetchActiveProductsCatalog = async () => {
+  const fetchProductsFromStoreSubcollections = async () => {
+    try {
+      const storesSnapshot = await getDocs(query(collection(db, 'lojas'), limit(25)));
+      const perStoreSnapshots = await Promise.allSettled(
+        storesSnapshot.docs.map((storeDoc) => getDocs(collection(db, 'lojas', storeDoc.id, 'produtos')))
+      );
+
+      const products = perStoreSnapshots.flatMap((result) => {
+        if (result.status !== 'fulfilled') return [];
+        return result.value.docs.map((docSnap) => buildCatalogProduct(docSnap, docSnap.data() || {}));
+      });
+
+      return mergeAndNormalizeProducts(products);
+    } catch (error) {
+      logHomeCatalogFallbackReason(error, 'lojas/*/produtos');
+      return [];
+    }
+  };
+
   const queryPlans = [
     {
       sourceLabel: 'collectionGroup(produtos)/status',
@@ -210,7 +230,10 @@ const fetchActiveProductsCatalog = async () => {
     return [];
   });
 
-  return mergeAndNormalizeProducts(collectedProducts);
+  const normalizedByQuery = mergeAndNormalizeProducts(collectedProducts);
+  if (normalizedByQuery.length > 0) return normalizedByQuery;
+
+  return fetchProductsFromStoreSubcollections();
 };
 
 const resolveDateValue = (value) => {
@@ -309,6 +332,26 @@ export const HomePage = () => {
   const ctaVariantColor = getCtaVariantColor();
   const [loadingProducts, setLoadingProducts] = useState(true);
   const [allActiveProducts, setAllActiveProducts] = useState([]);
+  const [regionLabel, setRegionLabel] = useState(DEFAULT_REGION_LABEL);
+  const [geoFailed, setGeoFailed] = useState(false);
+
+  useEffect(() => {
+    if (typeof navigator === 'undefined' || !navigator.geolocation) {
+      setGeoFailed(true);
+      return;
+    }
+
+    navigator.geolocation.getCurrentPosition(
+      () => {
+        setGeoFailed(false);
+      },
+      () => {
+        setGeoFailed(true);
+        setRegionLabel(DEFAULT_REGION_LABEL);
+      },
+      { enableHighAccuracy: false, timeout: 8000, maximumAge: 120000 }
+    );
+  }, []);
 
   useEffect(() => {
     let isMounted = true;
@@ -359,11 +402,14 @@ export const HomePage = () => {
         }));
 
       return {
-        name: section.name,
+        name:
+          section.name === 'Populares perto de você'
+            ? `Populares em ${regionLabel}`
+            : section.name,
         cards,
       };
     });
-  }, [allActiveProducts]);
+  }, [allActiveProducts, regionLabel]);
 
   return (
     <main className="home-page">
@@ -375,6 +421,11 @@ export const HomePage = () => {
       </section>
 
       <section className="hero container-shell">
+        {geoFailed ? (
+          <p className="text-xs text-gray-500 mb-3">
+            Localização indisponível. Exibindo catálogo geral de {regionLabel}.
+          </p>
+        ) : null}
         <p className="eyebrow">Entrega local com curadoria</p>
         <h1>{copyOptions[0].title}</h1>
         <p className="hero-subtitle">{copyOptions[0].subtitle}</p>
@@ -407,7 +458,11 @@ export const HomePage = () => {
             {!loadingProducts && cards.length === 0 && (
               <Card>
                 <div className="card-meta">
-                  <span>{EMPTY_STATE_LABEL}</span>
+                  <span>
+                    {geoFailed
+                      ? `Ainda não há itens para ${regionLabel}. Mostraremos novos produtos assim que forem publicados.`
+                      : EMPTY_STATE_LABEL}
+                  </span>
                 </div>
               </Card>
             )}

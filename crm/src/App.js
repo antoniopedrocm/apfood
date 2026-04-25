@@ -2737,31 +2737,8 @@ function App() {
 
   // --- SUBSTITUÍDO: Novo useEffect de inicialização do AudioManager ---
   useEffect(() => {
-    const tryAutoUnlock = async () => {
-      // tenta inicializar automaticamente se já foi aceito antes
-      try {
-        if (localStorage.getItem("audioUnlocked") === "true") {
-          await audioManager.init();
-        } else {
-          // tenta init para recuperar estado, mas pode ficar suspenso
-          await audioManager.init().catch(()=>{});
-        }
-
-        await audioManager.userUnlock({ userGesture: false });
-      } catch (e) {
-        console.error("Erro ao inicializar audioManager:", e);
-      }
-      setAudioAllowed(audioManager.unlocked);
-  
-      // --- CORREÇÃO: Lógica do botão movida para um state para ser renderizado pelo React ---
-      // O botão será renderizado condicionalmente no JSX principal
-    };
-  
-    // Só tenta desbloquear/mostrar botão se o usuário estiver logado
-    if(user) {
-        tryAutoUnlock();
-    }
-  
+    if (!user) return;
+    setAudioAllowed(audioManager.unlocked);
   }, [user]); // Depende do 'user' para saber se deve mostrar o botão
 
   // --- NOVO: Estado para controlar a exibição do botão de ativar som ---
@@ -2800,14 +2777,10 @@ function App() {
             const geoStatus = await navigator.permissions.query({ name: 'geolocation' });
             if (geoStatus.state === 'granted') {
               await requestGeolocation();
-            } else if (geoStatus.state === 'prompt') {
-              await requestGeolocation();
             }
           } catch (error) {
-            await requestGeolocation();
+            // Silencia falhas do Permissions API para não quebrar o fluxo principal.
           }
-        } else {
-          await requestGeolocation();
         }
       } catch (error) {
         console.warn('[App.js] Erro ao solicitar geolocalização:', error);
@@ -3418,12 +3391,7 @@ function App() {
 			  setCurrentPage('dashboard');
 			  sessionStorage.removeItem(GOOGLE_AUTH_FLOW_KEY);
 			}
-			// Tenta inicializar/resumir o AudioManager APÓS o login
-			if (localStorage.getItem("audioUnlocked") === "true") {
-			  audioManager.init().catch((e) => {
-					console.error("Erro no init pós-login:", e);
-			  });
-			}
+			setAudioAllowed(audioManager.unlocked);
 
 		  } catch (error) {
 			console.error("Erro ao carregar dados do usuário:", error);

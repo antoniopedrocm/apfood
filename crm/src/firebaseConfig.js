@@ -25,18 +25,18 @@ const GOOGLE_API_KEY = 'AIzaSyD_otNB81Of8fcsOPpCf_PvawQeVNF2Hkw';
 const firebaseConfig = {
   apiKey: envVar('REACT_APP_FIREBASE_API_KEY') || GOOGLE_API_KEY,
   authDomain: envVar('REACT_APP_FIREBASE_AUTH_DOMAIN') ||
-    'apfood-e9627.firebaseapp.com',
-  projectId: envVar('REACT_APP_FIREBASE_PROJECT_ID') || 'apfood-e9627',
+    'ana-guimaraes.firebaseapp.com',
+  projectId: envVar('REACT_APP_FIREBASE_PROJECT_ID') || 'ana-guimaraes',
   // Use the bucket ID configured in Firebase Console. For this project the
   // canonical bucket is `*.firebasestorage.app`; forcing `*.appspot.com`
   // causes upload preflight failures (reported in production as CORS errors).
   storageBucket:
-    envVar('REACT_APP_FIREBASE_STORAGE_BUCKET') || 'apfood-e9627.firebasestorage.app',
+    envVar('REACT_APP_FIREBASE_STORAGE_BUCKET') || 'ana-guimaraes.firebasestorage.app',
   messagingSenderId:
-    envVar('REACT_APP_FIREBASE_MESSAGING_SENDER_ID') || '516899771627',
+    envVar('REACT_APP_FIREBASE_MESSAGING_SENDER_ID') || '847824537421',
   appId:
     envVar('REACT_APP_FIREBASE_APP_ID') ||
-    '1:516899771627:web:REPLACE_WITH_YOUR_WEB_APP_ID',
+    '1:847824537421:web:75861057fd6f998ee49904',
   measurementId: envVar('REACT_APP_FIREBASE_MEASUREMENT_ID') || 'G-F8BVTNLEW7',
 };
 
@@ -61,6 +61,13 @@ if (missingEnvKeys.length && isDev) {
     '[firebaseConfig] Variáveis de ambiente ausentes, usando valores de fallback:',
     missingEnvKeys.join(', ')
   );
+}
+
+if (
+  isDev &&
+  (!firebaseConfig.appId || firebaseConfig.appId.includes('REPLACE_WITH_YOUR_WEB_APP_ID'))
+) {
+  console.warn('[firebaseConfig] appId inválido detectado; confira variáveis REACT_APP_FIREBASE_*.');
 }
 
 // Single source for the VAPID key so all modules read the same value and
